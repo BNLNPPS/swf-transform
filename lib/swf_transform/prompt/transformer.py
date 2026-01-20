@@ -24,8 +24,8 @@ try:
     from .payload_process import process_payload
 except Exception:
     # fallback to installed package layout
-    from idds.prompt.brokers.activemq import Subscriber, Publisher
-    from idds.prompt.payload_process import process_payload
+    from swf_transform.prompt.brokers.activemq import Subscriber, Publisher
+    from swf_transform.prompt.payload_process import process_payload
 
 
 setup_logging(__name__)

@@ -26,8 +26,8 @@ import traceback
 
 
 from idds.common.utils import setup_logging
-from idds.common.version import release_version
-from idds.prompt.transformer import Transformer
+from swf_transform.prompt.version import release_version
+from swf_transform.prompt.transformer import Transformer
 
 setup_logging(__name__, stream=sys.stdout)
 
