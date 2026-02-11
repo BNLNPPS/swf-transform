@@ -239,13 +239,15 @@ class BaseActiveMQ(object):
                         broker_addresses.append(pair)
                 else:
                     # Use hostname directly without resolution
-                    self.logger.info(f"Using hostname directly (no resolution): {b}:{port}")
+                    self.logger.info(
+                        f"Using hostname directly (no resolution): {b}:{port}"
+                    )
                     try:
                         p = int(port)
                     except Exception:
                         p = port
                     broker_addresses.append((b, p))
-                    
+
             except socket.gaierror as error:
                 self.logger.error("Cannot resolve hostname %s: %s" % (b, str(error)))
             except ValueError as error:
@@ -258,11 +260,11 @@ class BaseActiveMQ(object):
 
         use_ssl = self.broker.get("use_ssl", False)
         ssl_ca_certs = self.broker.get("ssl_ca_certs", None)
-        
+
         self.logger.info(
             f"SSL configuration: use_ssl={use_ssl}, ssl_ca_certs={ssl_ca_certs}"
         )
-        
+
         if use_ssl:
             import ssl
 
@@ -272,18 +274,22 @@ class BaseActiveMQ(object):
                 self.logger.info(f"Using custom CA certificates: {ssl_ca_certs}")
             else:
                 ssl_version = ssl.PROTOCOL_TLS
-                self.logger.info("Using system default SSL context (no custom CA certs)")
+                self.logger.info(
+                    "Using system default SSL context (no custom CA certs)"
+                )
         else:
             ssl_version = None
 
         conns = []
         for broker, port in broker_addresses:
-            self.logger.debug(f"Creating connection to {broker}:{port} (SSL: {use_ssl})")
+            self.logger.debug(
+                f"Creating connection to {broker}:{port} (SSL: {use_ssl})"
+            )
             conn = stomp.Connection12(
                 host_and_ports=[(broker, port)],
                 keepalive=True,
                 try_loopback_connect=False,
-                auto_content_length=False
+                auto_content_length=False,
                 # Shorter heartbeats (ms) so client/broker detect dead peers faster
                 heartbeats=(50000, 50000),
                 # timeout=broker_timeout,
@@ -297,7 +303,9 @@ class BaseActiveMQ(object):
                     )
                     self.logger.debug(f"SSL configured for {broker}:{port}")
                 except Exception as ex:
-                    self.logger.error(f"Failed to configure SSL for {broker}:{port}: {ex}")
+                    self.logger.error(
+                        f"Failed to configure SSL for {broker}:{port}: {ex}"
+                    )
                     raise
             # Store broker info as an attribute for logging purposes
             conn._broker_info = f"{broker}:{port}"
@@ -510,7 +518,7 @@ class Subscriber(BaseActiveMQ):
 
     def subscribe_conn(self, conn):
         # Get broker info from stored attribute or fallback to transport info
-        broker_info = getattr(conn, '_broker_info', None)
+        broker_info = getattr(conn, "_broker_info", None)
         if not broker_info:
             try:
                 host_and_ports = conn.transport._Transport__host_and_ports
@@ -520,10 +528,10 @@ class Subscriber(BaseActiveMQ):
                     broker_info = "unknown"
             except Exception:
                 broker_info = "unknown"
-        
+
         self.logger.info(f"Attempting connection to: {broker_info}")
         conn.set_listener("message-receiver", self.get_listener(broker_info, conn=conn))
-        
+
         try:
             conn.connect(
                 self.broker["username"],
@@ -536,7 +544,7 @@ class Subscriber(BaseActiveMQ):
             self.logger.error(
                 f"Failed to connect to broker {broker_info}: {ex}. "
                 f"Check network, credentials, SSL settings, and broker availability.",
-                exc_info=True
+                exc_info=True,
             )
             raise
         # conn.start()
