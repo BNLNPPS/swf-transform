@@ -24,6 +24,7 @@ dependencies = [
   "stomp.py",
   "idds-common",
   "cachetools",
+  "panda-client",
 ]
 
 [project.urls]
