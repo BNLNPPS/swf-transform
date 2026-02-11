@@ -282,6 +282,8 @@ class BaseActiveMQ(object):
             conn = stomp.Connection12(
                 host_and_ports=[(broker, port)],
                 keepalive=True,
+                try_loopback_connect=False,
+                auto_content_length=False
                 # Shorter heartbeats (ms) so client/broker detect dead peers faster
                 heartbeats=(50000, 50000),
                 # timeout=broker_timeout,
