@@ -73,7 +73,7 @@ class Transformer:
                     self._transformer_broadcast_broker = transformer_broadcast_broker
                     self._result_broker = result_broker
                     self._broker_initialized = True
-                    self.logger.info("Initialized brokers from central service")
+                    self.logger.info("Initialized brokers")
                 else:
                     self.logger.warning(
                         "Broker information from the central service is missing, will not initialize it"

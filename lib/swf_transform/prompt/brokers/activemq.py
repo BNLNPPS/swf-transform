@@ -258,15 +258,27 @@ class BaseActiveMQ(object):
 
         use_ssl = self.broker.get("use_ssl", False)
         ssl_ca_certs = self.broker.get("ssl_ca_certs", None)
+        
+        self.logger.info(
+            f"SSL configuration: use_ssl={use_ssl}, ssl_ca_certs={ssl_ca_certs}"
+        )
+        
         if use_ssl:
             import ssl
 
-            ssl_version = ssl.PROTOCOL_TLS_CLIENT if ssl_ca_certs else ssl.PROTOCOL_TLS
+            # If no CA certs provided, use default system certs
+            if ssl_ca_certs:
+                ssl_version = ssl.PROTOCOL_TLS_CLIENT
+                self.logger.info(f"Using custom CA certificates: {ssl_ca_certs}")
+            else:
+                ssl_version = ssl.PROTOCOL_TLS
+                self.logger.info("Using system default SSL context (no custom CA certs)")
         else:
             ssl_version = None
 
         conns = []
         for broker, port in broker_addresses:
+            self.logger.debug(f"Creating connection to {broker}:{port} (SSL: {use_ssl})")
             conn = stomp.Connection12(
                 host_and_ports=[(broker, port)],
                 keepalive=True,
@@ -275,11 +287,16 @@ class BaseActiveMQ(object):
                 # timeout=broker_timeout,
             )
             if use_ssl:
-                conn.transport.set_ssl(
-                    for_hosts=[(broker, port)],
-                    ca_certs=ssl_ca_certs if use_ssl else None,
-                    ssl_version=ssl_version,
-                )
+                try:
+                    conn.transport.set_ssl(
+                        for_hosts=[(broker, port)],
+                        ca_certs=ssl_ca_certs,
+                        ssl_version=ssl_version,
+                    )
+                    self.logger.debug(f"SSL configured for {broker}:{port}")
+                except Exception as ex:
+                    self.logger.error(f"Failed to configure SSL for {broker}:{port}: {ex}")
+                    raise
             # Store broker info as an attribute for logging purposes
             conn._broker_info = f"{broker}:{port}"
             conns.append(conn)
@@ -502,14 +519,24 @@ class Subscriber(BaseActiveMQ):
             except Exception:
                 broker_info = "unknown"
         
-        self.logger.info(f"connecting to: {broker_info}")
+        self.logger.info(f"Attempting connection to: {broker_info}")
         conn.set_listener("message-receiver", self.get_listener(broker_info, conn=conn))
-        conn.connect(
-            self.broker["username"],
-            self.broker["password"],
-            wait=True,
-            headers={"client-id": self.internal_id},
-        )
+        
+        try:
+            conn.connect(
+                self.broker["username"],
+                self.broker["password"],
+                wait=True,
+                headers={"client-id": self.internal_id},
+            )
+            self.logger.info(f"Successfully connected to: {broker_info}")
+        except Exception as ex:
+            self.logger.error(
+                f"Failed to connect to broker {broker_info}: {ex}. "
+                f"Check network, credentials, SSL settings, and broker availability.",
+                exc_info=True
+            )
+            raise
         # conn.start()
 
         # conn.subscribe(destination=self.broker['destination'], id=f'{self.internal_id}',
