@@ -259,7 +259,7 @@ class BaseActiveMQ(object):
                 host_and_ports=[(broker, port)],
                 keepalive=True,
                 # Shorter heartbeats (ms) so client/broker detect dead peers faster
-                heartbeats=(10000, 10000),
+                heartbeats=(50000, 50000),
                 # timeout=broker_timeout,
             )
             if use_ssl:
@@ -268,6 +268,8 @@ class BaseActiveMQ(object):
                     ca_certs=ssl_ca_certs if use_ssl else None,
                     ssl_version=ssl_version,
                 )
+            # Store broker info as an attribute for logging purposes
+            conn._broker_info = f"{broker}:{port}"
             conns.append(conn)
         self.conns = conns
 
@@ -476,7 +478,18 @@ class Subscriber(BaseActiveMQ):
         return self.listener
 
     def subscribe_conn(self, conn):
-        broker_info = conn.transport._Transport__host_and_ports[0][0]
+        # Get broker info from stored attribute or fallback to transport info
+        broker_info = getattr(conn, '_broker_info', None)
+        if not broker_info:
+            try:
+                host_and_ports = conn.transport._Transport__host_and_ports
+                if host_and_ports:
+                    broker_info = f"{host_and_ports[0][0]}:{host_and_ports[0][1]}"
+                else:
+                    broker_info = "unknown"
+            except Exception:
+                broker_info = "unknown"
+        
         self.logger.info(f"connecting to: {broker_info}")
         conn.set_listener("message-receiver", self.get_listener(broker_info, conn=conn))
         conn.connect(
