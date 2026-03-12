@@ -412,12 +412,17 @@ class Transformer:
 
                 elapsed = transformer_subscriber.idle_elapsed()
                 left = transformer_subscriber.idle_left(idle_seconds=self.idle_timeout)
-                # Determine how often to emit the idle-status log based on remaining time.
-                if left > 1800:        # > 30 minutes: log every 5 minutes
+                # Determine how often to emit the idle-status log:
+                # - first 5 minutes of waiting: every 1 minute
+                # - after 5 minutes, switch to the time-left-based rule:
+                #     left > 30 min → every 5 min; left > 10 min → every 2 min; else every 1 min
+                if elapsed <= 300:     # first 5 minutes: log every 1 minute
+                    log_interval = 60
+                elif left > 1800:      # > 30 minutes left: log every 5 minutes
                     log_interval = 300
-                elif left > 600:       # > 10 minutes: log every 2 minutes
+                elif left > 600:       # > 10 minutes left: log every 2 minutes
                     log_interval = 120
-                else:                  # <= 10 minutes: log every 1 minute
+                else:                  # <= 10 minutes left: log every 1 minute
                     log_interval = 60
 
                 now = time.time()
