@@ -396,7 +396,7 @@ class Transformer:
                 handler_kwargs={"result_publisher": result_publisher},
             )
 
-            _last_idle_log_at = 0  # tracks when the idle status was last logged
+            _last_idle_log_at = None  # None means the first log hasn't been emitted yet
 
             while True:
                 if transformer_subscriber.is_idle(idle_seconds=5) and self._to_stop:
@@ -421,7 +421,7 @@ class Transformer:
                     log_interval = 60
 
                 now = time.time()
-                if now - _last_idle_log_at >= log_interval:
+                if _last_idle_log_at is None or now - _last_idle_log_at >= log_interval:
                     self.logger.debug(
                         f"Idle timeout: {self.idle_timeout}s | "
                         f"Waiting since: {transformer_subscriber.waiting_since()} | "
