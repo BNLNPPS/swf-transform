@@ -298,7 +298,7 @@ class BaseActiveMQ(object):
                 try:
                     conn.transport.set_ssl(
                         for_hosts=[(broker, port)],
-                        ca_certs=ssl_ca_certs,
+                        ca_certs=ssl_ca_certs if ssl_ca_certs else None,
                         ssl_version=ssl_version,
                     )
                     self.logger.debug(f"SSL configured for {broker}:{port}")
@@ -596,6 +596,26 @@ class Subscriber(BaseActiveMQ):
         for conn in self.conns:
             if not conn.is_connected():
                 self.subscribe_conn(conn)
+
+    def idle_elapsed(self):
+        """Return how many seconds have elapsed since the last message (i.e. the current idle duration)."""
+        last = getattr(self, "last_message_at", 0)
+        return max(0.0, time.time() - last)
+
+    def idle_left(self, idle_seconds=None):
+        """Return how many seconds remain before the idle timeout fires.
+
+        A value <= 0 means the timeout has already been reached.
+        """
+        if idle_seconds is None:
+            idle_seconds = self.idle_seconds
+        return max(0.0, float(idle_seconds) - self.idle_elapsed())
+
+    def waiting_since(self):
+        """Return a human-readable timestamp of when waiting started (last_message_at)."""
+        import datetime as _dt
+        last = getattr(self, "last_message_at", 0)
+        return _dt.datetime.utcfromtimestamp(last).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     def is_idle(self, idle_seconds=None):
         """Return True if no message has been received for at least idle_seconds."""

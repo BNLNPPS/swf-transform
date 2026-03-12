@@ -396,6 +396,8 @@ class Transformer:
                 handler_kwargs={"result_publisher": result_publisher},
             )
 
+            _last_idle_log_at = 0  # tracks when the idle status was last logged
+
             while True:
                 if transformer_subscriber.is_idle(idle_seconds=5) and self._to_stop:
                     self.logger.debug(
@@ -407,6 +409,26 @@ class Transformer:
                         f"No message received from transformer broker for {self.idle_timeout} seconds, stopping transformer."
                     )
                     break
+
+                elapsed = transformer_subscriber.idle_elapsed()
+                left = transformer_subscriber.idle_left(idle_seconds=self.idle_timeout)
+                # Determine how often to emit the idle-status log based on remaining time.
+                if left > 1800:        # > 30 minutes: log every 5 minutes
+                    log_interval = 300
+                elif left > 600:       # > 10 minutes: log every 2 minutes
+                    log_interval = 120
+                else:                  # <= 10 minutes: log every 1 minute
+                    log_interval = 60
+
+                now = time.time()
+                if now - _last_idle_log_at >= log_interval:
+                    self.logger.debug(
+                        f"Idle timeout: {self.idle_timeout}s | "
+                        f"Waiting since: {transformer_subscriber.waiting_since()} | "
+                        f"Elapsed: {elapsed:.1f}s | "
+                        f"Time left: {left:.1f}s"
+                    )
+                    _last_idle_log_at = now
 
                 transformer_broadcast_subscriber.monitor()
                 transformer_subscriber.monitor()
