@@ -21,7 +21,8 @@ source $workdir/bin/activate
 echo "install panda client"
 pip install panda-client
 # pip install requests urllib3==1.26.18 argcomplete packaging anytree networkx stomp.py==8.0.1
-pip install requests urllib3 argcomplete packaging stomp.py wheel cachetools
+# pip install requests urllib3 argcomplete packaging stomp.py wheel cachetools
+pip install "requests<2.29" "urllib3<2" argcomplete packaging stomp.py wheel cachetools
 
 echo "install idds-common"
 pip install idds-common
