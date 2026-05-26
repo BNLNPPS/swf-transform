@@ -15,7 +15,7 @@ mkdir -p $workdir
 
 echo "setup virtualenv $workdir"
 
-python3.9 -m venv $workdir
+python3 -m venv $workdir
 source $workdir/bin/activate
 
 echo "install panda client"
