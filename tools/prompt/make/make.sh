@@ -15,7 +15,7 @@ mkdir -p $workdir
 
 echo "setup virtualenv $workdir"
 
-python3 -m venv $workdir
+python3.9 -m venv $workdir
 source $workdir/bin/activate
 
 echo "install panda client"
@@ -67,6 +67,10 @@ zip -r $tmpzip  bin
 cd ${RootDir}
 echo zip -r $tmpzip  conf
 zip -r $tmpzip  conf
+
+cd ${RootDir}
+echo zip -r $tmpzip  wrapper
+zip -r $tmpzip  wrapper
 
 cd -
 

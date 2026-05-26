@@ -16,13 +16,46 @@ import tempfile
 import time
 
 
-# Resolve the eicrecon_process.sh template path:
-#   1. $SWF_TRANSFORM_WRAPPER env var (explicit deployment override)
-#   2. <repo-root>/wrapper/  relative to this file's location
-_WRAPPER_DIR = os.environ.get("SWF_TRANSFORM_WRAPPER") or os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../../wrapper")
-)
-_SCRIPT_TEMPLATE = os.path.join(_WRAPPER_DIR, "eicrecon_process.sh")
+def _find_script_template():
+    """
+    Locate eicrecon_process.sh using multiple search strategies so that the
+    code works both in a source checkout and after run_prompt_wrapper extracts
+    its zip payload.
+
+    Search order
+    ------------
+    1. ``$SWF_TRANSFORM_WRAPPER`` env var (explicit deployment override).
+    2. Relative to *this file* – works for source / editable installs where
+       the layout is ``lib/swf_transform/prompt/`` → ``../../../wrapper/``.
+    3. Relative to ``os.getcwd()`` – works when ``run_prompt_wrapper`` has
+       extracted everything into the current working directory, placing
+       ``wrapper/`` alongside ``lib_py/``.
+    """
+    script_name = "eicrecon_process.sh"
+
+    # 1. Explicit env-var override
+    env_dir = os.environ.get("SWF_TRANSFORM_WRAPPER")
+    if env_dir:
+        candidate = os.path.join(env_dir, script_name)
+        if os.path.exists(candidate):
+            return candidate
+
+    # 2. Relative to __file__: lib[_py]/swf_transform/prompt/ → ../../../wrapper/
+    candidate = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../../wrapper", script_name)
+    )
+    if os.path.exists(candidate):
+        return candidate
+
+    # 3. Relative to CWD (run_prompt_wrapper extraction directory)
+    candidate = os.path.join(os.getcwd(), "wrapper", script_name)
+    if os.path.exists(candidate):
+        return candidate
+
+    # Return the __file__-relative path so the caller gets a clear OSError
+    return os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "../../../wrapper", script_name)
+    )
 
 
 def extract_version_from_filename(filename):
@@ -121,7 +154,7 @@ def process_payload(payload):
     # Load the script template and fill in the placeholders
     # ------------------------------------------------------------------ #
     try:
-        with open(_SCRIPT_TEMPLATE) as fh:
+        with open(_find_script_template()) as fh:
             script_content = fh.read()
     except OSError as exc:
         return False, None, f"Cannot read eicrecon script template: {exc}"
