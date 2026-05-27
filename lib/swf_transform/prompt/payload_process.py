@@ -72,7 +72,60 @@ def extract_version_from_filename(filename):
     return "26.03.0"
 
 
-def process_payload(payload):
+def process_payload_fake(payload):
+    """
+    Simulate slice processing for ``file_type`` values of ``"fake"`` or
+    ``"mock"``.  Instead of running eicrecon the function simply sleeps for
+    ``slice_processing_time`` seconds (default 30).
+
+    Parameters
+    ----------
+    payload : dict
+        Same broker ``slice`` message ``content`` dict as
+        :func:`process_payload_eicrecon`.  Only ``slice_processing_time``
+        is consumed; all other fields are passed through unchanged.
+
+    Returns
+    -------
+    status : bool   Always ``True``.
+    result : dict   Copy of *payload* enriched with ``processed`` and
+                    ``actual_processing_time``.
+    error  : str    Always ``None``.
+    """
+    logger = logging.getLogger("PayloadProcessor")
+    logger.info(f"Processing fake/mock payload: {payload}")
+
+    # ------------------------------------------------------------------ #
+    # Validate slice_processing_time
+    # ------------------------------------------------------------------ #
+    slice_processing_time = payload.get("slice_processing_time", 30)
+    try:
+        slice_processing_time = float(slice_processing_time)
+        if slice_processing_time < 0:
+            raise ValueError("slice_processing_time must be non-negative")
+    except (ValueError, TypeError):
+        logger.warning(
+            f"Invalid slice_processing_time {slice_processing_time}, "
+            f"using default 30 seconds"
+        )
+        slice_processing_time = 30
+
+    logger.info(
+        f"Sleeping for {slice_processing_time} seconds to simulate processing"
+    )
+
+    t0 = time.time()
+    time.sleep(slice_processing_time)
+    elapsed = time.time() - t0
+
+    processed_payload = payload.copy()
+    processed_payload["processed"] = True
+    processed_payload["actual_processing_time"] = elapsed
+
+    return True, processed_payload, None
+
+
+def process_payload_eicrecon(payload):
     """
     Process a slice payload by running eicrecon on the input file inside the
     EIC Singularity container.
@@ -234,3 +287,29 @@ def process_payload(payload):
                 os.unlink(script_path)
             except OSError:
                 pass
+
+
+def process_payload(payload):
+    """
+    Dispatch to the appropriate processing function based on ``file_type``.
+
+    If ``file_type`` is ``"fake"`` or ``"mock"``, delegates to
+    :func:`process_payload_fake` which simulates processing by sleeping for
+    ``slice_processing_time`` seconds.  All other file types are handled by
+    :func:`process_payload_eicrecon`.
+
+    Parameters
+    ----------
+    payload : dict
+        Broker ``slice`` message ``content`` dict.
+
+    Returns
+    -------
+    status : bool
+    result : dict or None
+    error  : str or None
+    """
+    file_type = payload.get("file_type", "")
+    if file_type in ("fake", "mock"):
+        return process_payload_fake(payload)
+    return process_payload_eicrecon(payload)
