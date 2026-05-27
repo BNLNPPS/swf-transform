@@ -85,6 +85,20 @@ class Transformer:
     def get_idds_server(self):
         return os.environ.get("IDDS_HOST", None)
 
+    @staticmethod
+    def _mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token")):
+        """Return a deep copy of *obj* with sensitive string values replaced by '***'."""
+        if isinstance(obj, dict):
+            return {
+                k: "***" if any(s in k.lower() for s in _sensitive)
+                else Transformer._mask_sensitive(v, _sensitive)
+                for k, v in obj.items()
+            }
+        if isinstance(obj, (list, tuple)):
+            masked = [Transformer._mask_sensitive(i, _sensitive) for i in obj]
+            return type(obj)(masked)
+        return obj
+
     def get_broker_info_from_panda_server(self):
         """
         Get broker infomation from the iDDS server through PanDA service.
@@ -105,11 +119,12 @@ class Transformer:
             idds_utils.json_dumps,
             idds_host=idds_server,
             compress=True,
-            verbose=idds_utils.is_panda_client_verbose(),
+            verbose=False,
             manager=True,
         )
         ret = client.get_metainfo(name="prompt_broker")
-        self.logger.debug(f"get_metainfo returned: {type(ret)} {ret}")
+        self.logger.debug(f"get_metainfo returned: {type(ret)} {self._mask_sensitive(ret)}")
+        meta_info = None
         if ret[0] == 0 and ret[1][0]:
             idds_ret = ret[1][1]
             if type(idds_ret) in (list, tuple) and idds_ret[0] in (0, True):
@@ -131,6 +146,39 @@ class Transformer:
             self.logger.warning(
                 "Failed to get meta info from Panda server: %s" % str(ret)
             )
+
+        if meta_info is None:
+            self.logger.info("Retrying get_metainfo with verbose=True.")
+            client = idds_api.get_api(
+                idds_utils.json_dumps,
+                idds_host=idds_server,
+                compress=True,
+                verbose=True,
+                manager=True,
+            )
+            ret = client.get_metainfo(name="prompt_broker")
+            self.logger.debug(f"get_metainfo (verbose) returned: {type(ret)} {self._mask_sensitive(ret)}")
+            if ret[0] == 0 and ret[1][0]:
+                idds_ret = ret[1][1]
+                if type(idds_ret) in (list, tuple) and idds_ret[0] in (0, True):
+                    meta_info = idds_ret[1]
+                    if type(meta_info) in [dict]:
+                        pass
+                    elif type(meta_info) in [str]:
+                        try:
+                            meta_info = json.loads(meta_info)
+                        except Exception as ex:
+                            self.logger.warning(
+                                "Failed to json loads meta info(%s): %s" % (meta_info, ex)
+                            )
+                else:
+                    self.logger.warning(
+                        "Failed to get meta info from iDDS (verbose): %s" % str(ret)
+                    )
+            else:
+                self.logger.warning(
+                    "Failed to get meta info from Panda server (verbose): %s" % str(ret)
+                )
 
         return meta_info
 
