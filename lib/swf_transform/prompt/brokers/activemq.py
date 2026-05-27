@@ -134,7 +134,9 @@ class MessagingListener(stomp.ConnectionListener):
             # Attempt to nack using flexible signatures; if transport is gone,
             # trigger reconnect via subscriber.monitor().
             try:
+                self.logger.debug(f"Negotiating NACK for message ID {frame.headers.get('message-id')} from broker {self.__broker}")
                 self.conn.nack(frame.headers["message-id"])
+                self.logger.debug(f"Message ID {frame.headers.get('message-id')} nacked from broker {self.__broker}")
             except Exception:
                 # If nack is unavailable or fails, log and move on.
                 self.logger.exception("nack failed")
