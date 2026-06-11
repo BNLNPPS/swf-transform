@@ -402,6 +402,9 @@ class Transformer:
             else:
                 try:
                     result_publisher.publish(slice_result_msg)
+                    self.logger.info(
+                        f"Published slice_result message for run_id={run_id}: {slice_result_msg}"
+                    )
                 except Exception:
                     self.logger.exception("Failed to publish slice_result_msg")
         except Exception as error:

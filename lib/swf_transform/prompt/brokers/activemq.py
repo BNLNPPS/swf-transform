@@ -111,8 +111,8 @@ class MessagingListener(stomp.ConnectionListener):
             self.subscriber.fail()
 
     def on_message(self, frame):
-        self.logger.debug(
-            f"[broker] [{self.__broker}]: headers: {frame.headers}, body: {frame.body}"
+        self.logger.info(
+            f"[broker] received message from {self.__broker}: headers: {frame.headers}, body: {frame.body}"
         )
         headers = frame.headers
         try:
@@ -122,21 +122,24 @@ class MessagingListener(stomp.ConnectionListener):
                 except Exception:
                     pass
 
+            self.logger.info(f"Handling message ID {frame.headers.get('message-id')} from broker {self.__broker}")
             self.handler(headers, json.loads(frame.body), self.handler_kwargs)
+            self.logger.info(f"Handled message ID {frame.headers.get('message-id')} from broker {self.__broker} successfully")
+
             # Some stomp.py versions do not accept a `subscription=` keyword
             # argument for ack/nack. Use positional args: (message-id, subscription).
-            self.logger.debug(f"Acknowledging message ID {frame.headers.get('message-id')} from broker {self.__broker}")
+            self.logger.info(f"Acknowledging message ID {frame.headers.get('message-id')} from broker {self.__broker}")
             self.conn.ack(frame.headers["message-id"])
-            self.logger.debug(f"Message ID {frame.headers.get('message-id')} acknowledged from broker {self.__broker}")
+            self.logger.info(f"Message ID {frame.headers.get('message-id')} acknowledged from broker {self.__broker}")
         except Exception as ex:
-            self.logger.error(f"Failed to handle message: {ex}", exc_info=True)
+            self.logger.error(f"Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
 
             # Attempt to nack using flexible signatures; if transport is gone,
             # trigger reconnect via subscriber.monitor().
             try:
-                self.logger.debug(f"Negotiating NACK for message ID {frame.headers.get('message-id')} from broker {self.__broker}")
+                self.logger.info(f"Negotiating NACK for message ID {frame.headers.get('message-id')} from broker {self.__broker}")
                 self.conn.nack(frame.headers["message-id"])
-                self.logger.debug(f"Message ID {frame.headers.get('message-id')} nacked from broker {self.__broker}")
+                self.logger.info(f"Message ID {frame.headers.get('message-id')} nacked from broker {self.__broker}")
             except Exception:
                 # If nack is unavailable or fails, log and move on.
                 self.logger.exception("nack failed")
