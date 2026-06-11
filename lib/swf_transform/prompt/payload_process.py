@@ -11,6 +11,7 @@
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -114,13 +115,46 @@ def process_payload_fake(payload):
         f"Sleeping for {slice_processing_time} seconds to simulate processing"
     )
 
+    # ------------------------------------------------------------------ #
+    # Build the output file name
+    # ------------------------------------------------------------------ #
+    run_id = payload.get("run_id", "unknown")
+    slice_id = payload.get("slice_id", 0)
+    start = payload.get("start", 0)
+    end = payload.get("end", 0)
+    output_filename = f"run_{run_id}_slice_{slice_id}_start_{start}_end_{end}.edm4eic.root"
+
+    dest_path = payload.get("dest_path")
+    output_file = None
+    if dest_path:
+        dest_path = os.path.join(dest_path, str(run_id))
+        output_file = os.path.join(dest_path, output_filename)
+        os.makedirs(dest_path, exist_ok=True)
+    else:
+        logger.info(
+            f"No dest_path in payload; skipping output file creation for {output_filename}"
+        )
+
     t0 = time.time()
     time.sleep(slice_processing_time)
     elapsed = time.time() - t0
 
+    # ------------------------------------------------------------------ #
+    # Create empty output file in dest_path (simulates a real output file)
+    # ------------------------------------------------------------------ #
+    if output_file:
+        try:
+            with open(output_file, "wb"):
+                pass
+            logger.info(f"Created empty output file: {output_file}")
+        except OSError as exc:
+            logger.warning(f"Could not create output file {output_file}: {exc}")
+
     processed_payload = payload.copy()
     processed_payload["processed"] = True
     processed_payload["actual_processing_time"] = elapsed
+    processed_payload["output_file"] = output_file
+    processed_payload["output_filename"] = output_filename
 
     return True, processed_payload, None
 
@@ -162,6 +196,7 @@ def process_payload_eicrecon(payload):
     end = payload.get("end")
     execution_id = payload.get("execution_id", "unknown")
     slice_id = payload.get("slice_id", 0)
+    run_id = payload.get("run_id", "unknown")
 
     if not filename:
         return False, None, "Missing 'filename' in payload"
@@ -189,9 +224,8 @@ def process_payload_eicrecon(payload):
     workdir = os.environ.get("WORKDIR") or payload.get("workdir") or os.getcwd()
     os.makedirs(workdir, exist_ok=True)
 
-    output_file = os.path.join(
-        workdir, f"{execution_id}_slice_{int(slice_id):03d}.edm4eic.root"
-    )
+    output_filename = f"run_{run_id}_slice_{slice_id}_start_{start}_end_{end}.edm4eic.root"
+    output_file = os.path.join(workdir, output_filename)
 
     try:
         eicrecon_timeout = int(os.environ.get("EICRECON_TIMEOUT", "3600"))
@@ -260,12 +294,34 @@ def process_payload_eicrecon(payload):
             return False, None, error
 
         # ------------------------------------------------------------ #
+        # Copy output file to dest_path/run_id/
+        # ------------------------------------------------------------ #
+        dest_path = payload.get("dest_path")
+        dest_file = None
+        if dest_path:
+            dest_dir = os.path.join(dest_path, str(run_id))
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_file = os.path.join(dest_dir, output_filename)
+            try:
+                shutil.copy2(output_file, dest_file)
+                logger.info(f"Copied output file to: {dest_file}")
+            except OSError as exc:
+                error = f"Failed to copy output file to {dest_file}: {exc}"
+                logger.error(error)
+                return False, None, error
+        else:
+            logger.info(
+                f"No dest_path in payload; output file left at: {output_file}"
+            )
+
+        # ------------------------------------------------------------ #
         # Success — enrich result dict
         # ------------------------------------------------------------ #
         processed_payload = payload.copy()
         processed_payload["processed"] = True
         processed_payload["actual_processing_time"] = elapsed
-        processed_payload["output_file"] = output_file
+        processed_payload["output_file"] = dest_file or output_file
+        processed_payload["output_filename"] = output_filename
         processed_payload["nevents_processed"] = nevents
         processed_payload["epic_version"] = version
 
