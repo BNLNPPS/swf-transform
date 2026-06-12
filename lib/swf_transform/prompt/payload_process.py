@@ -159,6 +159,7 @@ def process_payload_fake(payload):
     processed_payload["actual_processing_time"] = elapsed
     processed_payload["output_file"] = output_file
     processed_payload["output_filename"] = output_filename
+    processed_payload["state"] = 'processed'
 
     return True, processed_payload, None
 
@@ -331,6 +332,7 @@ def process_payload_eicrecon(payload):
         processed_payload["output_filename"] = output_filename
         processed_payload["nevents_processed"] = nevents
         processed_payload["epic_version"] = version
+        processed_payload["state"] = 'processed'
 
         return True, processed_payload, None
 
