@@ -118,11 +118,13 @@ def process_payload_fake(payload):
     # ------------------------------------------------------------------ #
     # Build the output file name
     # ------------------------------------------------------------------ #
+    filename = payload.get("filename")
+    input_filename = os.path.splitext(os.path.basename(filename))[0] if filename else "unknown"
     run_id = payload.get("run_id", "unknown")
     slice_id = payload.get("slice_id", 0)
     start = payload.get("start", 0)
     end = payload.get("end", 0)
-    output_filename = f"run_{run_id}_slice_{slice_id}_start_{start}_end_{end}.edm4eic.root"
+    output_filename = f"{input_filename}_run_{run_id}_slice_{slice_id}_s{start}_e{end}.edm4eic.root"
 
     dest_path = payload.get("dest_path")
     output_file = None
@@ -197,6 +199,7 @@ def process_payload_eicrecon(payload):
     execution_id = payload.get("execution_id", "unknown")
     slice_id = payload.get("slice_id", 0)
     run_id = payload.get("run_id", "unknown")
+    input_filename = os.path.splitext(os.path.basename(filename))[0] if filename else "unknown"
 
     if not filename:
         return False, None, "Missing 'filename' in payload"
@@ -224,7 +227,7 @@ def process_payload_eicrecon(payload):
     workdir = os.environ.get("WORKDIR") or payload.get("workdir") or os.getcwd()
     os.makedirs(workdir, exist_ok=True)
 
-    output_filename = f"run_{run_id}_slice_{slice_id}_start_{start}_end_{end}.edm4eic.root"
+    output_filename = f"{input_filename}_run_{run_id}_slice_{slice_id}_s{start}_e{end}.edm4eic.root"
     output_file = os.path.join(workdir, output_filename)
 
     try:
