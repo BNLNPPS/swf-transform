@@ -98,23 +98,29 @@ class MessagingListener(stomp.ConnectionListener):
                 hdrs = headers.headers
             else:
                 hdrs = headers
-            self.logger.info("STOMP CONNECTED from broker %s: %s", self.__broker, hdrs)
-        except Exception:
+            self.logger.info("[broker] [%s]: STOMP CONNECTED: %s", self.__broker, hdrs)
+        except Exception as ex:
             self.logger.info(
-                "STOMP CONNECTED from broker %s (failed to extract headers)",
+                "[broker] [%s]: STOMP CONNECTED (failed to extract headers): %s",
                 self.__broker,
+                ex,
             )
 
     def on_heartbeat_timeout(self):
-        self.logger.warning("STOMP heartbeat timeout.")
+        self.logger.warning("[broker] [%s]: STOMP heartbeat timeout.", self.__broker)
         if self.subscriber is not None:
             self.subscriber.fail()
 
     def on_message(self, frame):
         self.logger.info(
-            f"[broker] received message from {self.__broker}: headers: {frame.headers}, body: {frame.body}"
+            "[broker] [%s]: received message: headers: %s, body: %s",
+            self.__broker,
+            frame.headers,
+            frame.body
         )
         headers = frame.headers
+        # Snapshot connection generation so we can detect a reconnect during processing
+        recv_generation = self.subscriber.connection_generation if self.subscriber is not None else None
         try:
             if self.subscriber is not None:
                 try:
@@ -122,27 +128,36 @@ class MessagingListener(stomp.ConnectionListener):
                 except Exception:
                     pass
 
-            self.logger.info(f"Handling message ID {frame.headers.get('message-id')} from broker {self.__broker}")
+            self.logger.info(f"[broker] [{self.__broker}]: Handling message ID {frame.headers.get('message-id')}")
             self.handler(headers, json.loads(frame.body), self.handler_kwargs)
-            self.logger.info(f"Handled message ID {frame.headers.get('message-id')} from broker {self.__broker} successfully")
+            self.logger.info(f"[broker] [{self.__broker}]: Handled message ID {frame.headers.get('message-id')} successfully")
 
-            # Some stomp.py versions do not accept a `subscription=` keyword
-            # argument for ack/nack. Use positional args: (message-id, subscription).
-            self.logger.info(f"Acknowledging message ID {frame.headers.get('message-id')} from broker {self.__broker}")
-            self.conn.ack(frame.headers["message-id"])
-            self.logger.info(f"Message ID {frame.headers.get('message-id')} acknowledged from broker {self.__broker}")
+            # STOMP 1.2: ACK id must match the MESSAGE frame's 'ack' header, not 'message-id'
+            ack_id = frame.headers.get("ack") or frame.headers["message-id"]
+            cur_generation = self.subscriber.connection_generation if self.subscriber is not None else recv_generation
+            if recv_generation is not None and recv_generation != cur_generation:
+                # The broker session changed while the payload was running (disconnect + reconnect).
+                # The old session's pending ACK is gone; the broker will redeliver on the new session.
+                self.logger.warning(
+                    f"[broker] [{self.__broker}]: Connection reconnected during processing of message {frame.headers.get('message-id')} "
+                    f"(generation {recv_generation} → {cur_generation}); skipping ACK — broker will redeliver"
+                )
+            else:
+                self.logger.info(f"[broker] [{self.__broker}]: Acknowledging message ID {frame.headers.get('message-id')}")
+                self.conn.ack(ack_id)
+                self.logger.info(f"[broker] [{self.__broker}]: Message ID {frame.headers.get('message-id')} acknowledged")
         except Exception as ex:
-            self.logger.error(f"Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
-
+            self.logger.error(f"[broker] [{self.__broker}]: Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
             # Attempt to nack using flexible signatures; if transport is gone,
             # trigger reconnect via subscriber.monitor().
             try:
-                self.logger.info(f"Negotiating NACK for message ID {frame.headers.get('message-id')} from broker {self.__broker}")
-                self.conn.nack(frame.headers["message-id"])
-                self.logger.info(f"Message ID {frame.headers.get('message-id')} nacked from broker {self.__broker}")
+                self.logger.info(f"[broker] [{self.__broker}]: Negotiating NACK for message ID {frame.headers.get('message-id')}")
+                nack_id = frame.headers.get("ack") or frame.headers["message-id"]
+                self.conn.nack(nack_id)
+                self.logger.info(f"[broker] [{self.__broker}]: Message ID {frame.headers.get('message-id')} nacked")
             except Exception:
                 # If nack is unavailable or fails, log and move on.
-                self.logger.exception("nack failed")
+                self.logger.exception(f"[broker] [{self.__broker}]: nack failed")
 
             if self.subscriber is not None:
                 self.subscriber.fail()
@@ -299,7 +314,7 @@ class BaseActiveMQ(object):
                 try_loopback_connect=False,
                 auto_content_length=False,
                 # Shorter heartbeats (ms) so client/broker detect dead peers faster
-                heartbeats=(50000, 50000),
+                heartbeats=(30000, 30000),
                 # timeout=broker_timeout,
             )
             if use_ssl:
@@ -505,6 +520,8 @@ class Subscriber(BaseActiveMQ):
         self.selector = selector
         # idle detection: timestamp of last message received
         self.last_message_at = time.time()
+        # incremented on every (re)connect so on_message can detect mid-processing reconnects
+        self.connection_generation = 0
 
         # default idle threshold in seconds (can be overridden by passing 'idle_seconds' in kwargs)
         self.idle_seconds = int(kwargs.get("idle_seconds", 5))
@@ -593,6 +610,7 @@ class Subscriber(BaseActiveMQ):
             ack="client-individual",
             headers=headers,
         )
+        self.connection_generation += 1
         self.logger.info(
             f"Subscribed to {self.broker['destination']} with selector: {selector} on broker {broker_info}, ack mode: client-individual, headers: {headers}"
         )

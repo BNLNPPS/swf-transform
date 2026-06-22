@@ -9,6 +9,7 @@
 # - Wen Guan, <wen.guan@cern.ch>, 2025 - 2026
 
 import logging
+import multiprocessing
 import os
 import shutil
 import subprocess

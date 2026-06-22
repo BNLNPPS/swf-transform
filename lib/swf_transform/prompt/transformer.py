@@ -494,6 +494,20 @@ class Transformer:
 
             self.logger.info("Transformer loop exited, cleaning up processors")
             cleanup_processors()
+            # Disconnect STOMP connections so background heartbeat threads stop before
+            # sys.exit() tears down the interpreter.  Without this the heartbeat thread
+            # races against Python's module-globals teardown and corrupts the malloc heap
+            # (manifests as "malloc(): unsorted double linked list corrupted" / SIGABRT).
+            for obj, label in [
+                (transformer_subscriber, "transformer_subscriber"),
+                (transformer_broadcast_subscriber, "transformer_broadcast_subscriber"),
+                (result_publisher, "result_publisher"),
+            ]:
+                try:
+                    obj.stop()
+                    self.logger.info(f"Stopped {label}")
+                except Exception:
+                    self.logger.exception(f"Error stopping {label}")
             return 0
         except Exception as ex:
             self.logger.error("Error running transformer: %s" % str(ex), exc_info=True)
