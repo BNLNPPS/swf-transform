@@ -22,12 +22,12 @@ from .utils import setup_logging
 try:
     # prefer local package layout
     from .brokers.activemq import Subscriber, Publisher
-    from .payload_process import process_payload
+    from .payload_process import process_payload, cleanup_processors
     from .conf import get_broker_config
 except Exception:
     # fallback to installed package layout
     from swf_transform.prompt.brokers.activemq import Subscriber, Publisher
-    from swf_transform.prompt.payload_process import process_payload
+    from swf_transform.prompt.payload_process import process_payload, cleanup_processors
     from swf_transform.prompt.conf import get_broker_config
 
 
@@ -492,7 +492,10 @@ class Transformer:
 
                 time.sleep(1)
 
+            self.logger.info("Transformer loop exited, cleaning up processors")
+            cleanup_processors()
             return 0
         except Exception as ex:
             self.logger.error("Error running transformer: %s" % str(ex), exc_info=True)
+            cleanup_processors()
             return -1

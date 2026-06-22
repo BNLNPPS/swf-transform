@@ -10,11 +10,12 @@
 
 import logging
 import os
-import re
 import shutil
 import subprocess
 import tempfile
 import time
+
+from swf_transform.prompt.utils import extract_payload_fields
 
 
 def _find_script_template():
@@ -58,19 +59,6 @@ def _find_script_template():
         os.path.join(os.path.dirname(__file__), "../../../wrapper", script_name)
     )
 
-
-def extract_version_from_filename(filename):
-    """
-    Extract the EPIC campaign version string from the XRootD / local path.
-
-    Example path:
-        root://dtn-eic.jlab.org:1094//volatile/eic/EPIC//FULL/26.03.0/...
-    Returns the version string (e.g. '26.03.0'), or the fallback '26.03.0'.
-    """
-    match = re.search(r'/FULL/(\d+\.\d+\.\d+)/', filename)
-    if match:
-        return match.group(1)
-    return "26.03.0"
 
 
 def process_payload_fake(payload):
@@ -194,56 +182,21 @@ def process_payload_eicrecon(payload):
     logger.info(f"Processing payload: {payload}")
 
     # ------------------------------------------------------------------ #
-    # Extract required fields
+    # Extract and validate fields
     # ------------------------------------------------------------------ #
-    filename = payload.get("filename")
-    start = payload.get("start")
-    end = payload.get("end")
-    execution_id = payload.get("execution_id", "unknown")
-    slice_id = payload.get("slice_id", 0)
-    run_id = payload.get("run_id", "unknown")
-    input_filename = os.path.splitext(os.path.basename(filename))[0] if filename else "unknown"
-    tf_filename = payload.get("tf_filename")
-    input_tf_filename = os.path.splitext(os.path.basename(tf_filename))[0] if tf_filename else input_filename
+    fields, error = extract_payload_fields(payload, logger)
+    if error:
+        return False, None, error
 
-    if not filename:
-        return False, None, "Missing 'filename' in payload"
-    if start is None or end is None:
-        return False, None, "Missing 'start' or 'end' in payload"
-
-    try:
-        start = int(start)
-        end = int(end)
-    except (ValueError, TypeError) as exc:
-        return False, None, f"Invalid 'start' or 'end' values: {exc}"
-
-    if end < start:
-        return False, None, f"'end' ({end}) must be >= 'start' ({start})"
-
-    # ------------------------------------------------------------------ #
-    # Derived values
-    # ------------------------------------------------------------------ #
-    version = payload.get("epic_version") or extract_version_from_filename(filename)
-    logger.info(f"EPIC version: {version} (source: {'payload' if payload.get('epic_version') else 'filename'})")
-
-    nevents = end - start + 1
-    nskip = start
-
-    workdir = os.environ.get("WORKDIR") or payload.get("workdir") or os.getcwd()
-    os.makedirs(workdir, exist_ok=True)
-
-    output_filename = f"{input_tf_filename}_run_{run_id}_slice_{slice_id}_s{start}_e{end}.edm4eic.root"
-    output_file = os.path.join(workdir, output_filename)
-
-    try:
-        eicrecon_timeout = int(os.environ.get("EICRECON_TIMEOUT", "3600"))
-    except (ValueError, TypeError):
-        eicrecon_timeout = 3600
-
-    logger.info(
-        f"eicrecon plan: file={filename}, nskip={nskip}, nevents={nevents}, "
-        f"output={output_file}"
-    )
+    filename = fields["filename"]
+    run_id = fields["run_id"]
+    version = fields["version"]
+    nevents = fields["nevents"]
+    nskip = fields["nskip"]
+    workdir = fields["workdir"]
+    output_filename = fields["output_filename"]
+    output_file = fields["output_file"]
+    eicrecon_timeout = fields["eicrecon_timeout"]
 
     # ------------------------------------------------------------------ #
     # Load the script template and fill in the placeholders
@@ -356,12 +309,15 @@ def process_payload_eicrecon(payload):
 
 def process_payload(payload):
     """
-    Dispatch to the appropriate processing function based on ``file_type``.
+    Dispatch to the appropriate processing function based on ``file_type`` and
+    ``processor_type``.
 
-    If ``file_type`` is ``"fake"`` or ``"mock"``, delegates to
-    :func:`process_payload_fake` which simulates processing by sleeping for
-    ``slice_processing_time`` seconds.  All other file types are handled by
-    :func:`process_payload_eicrecon`.
+    Dispatch order
+    --------------
+    1. ``file_type`` is ``"fake"`` or ``"mock"`` → :func:`process_payload_fake`.
+    2. ``processor_type`` is ``"zeromq"`` → ``process_payload_zmq`` from
+       :mod:`swf_transform.prompt.payload_process_zmq`.
+    3. Anything else → :func:`process_payload_eicrecon`.
 
     Parameters
     ----------
@@ -377,4 +333,19 @@ def process_payload(payload):
     file_type = payload.get("file_type", "")
     if file_type in ("fake", "mock"):
         return process_payload_fake(payload)
+
+    processor_type = payload.get("processor_type", "")
+    if processor_type == "zeromq":
+        from swf_transform.prompt.payload_process_zmq import process_payload_zmq
+        return process_payload_zmq(payload)
+
     return process_payload_eicrecon(payload)
+
+
+def cleanup_processors():
+    """Terminate any background processor daemons (e.g. ZeroMQ eicrecon)."""
+    try:
+        from swf_transform.prompt.payload_process_zmq import terminate_zmq_processors
+        terminate_zmq_processors()
+    except Exception:
+        pass
