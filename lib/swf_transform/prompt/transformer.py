@@ -492,8 +492,6 @@ class Transformer:
 
                 time.sleep(1)
 
-            self.logger.info("Transformer loop exited, cleaning up processors")
-            cleanup_processors()
             # Disconnect STOMP connections so background heartbeat threads stop before
             # sys.exit() tears down the interpreter.  Without this the heartbeat thread
             # races against Python's module-globals teardown and corrupts the malloc heap
@@ -508,6 +506,10 @@ class Transformer:
                     self.logger.info(f"Stopped {label}")
                 except Exception:
                     self.logger.exception(f"Error stopping {label}")
+
+            self.logger.info("Transformer loop exited, cleaning up processors")
+            cleanup_processors()
+            
             return 0
         except Exception as ex:
             self.logger.error("Error running transformer: %s" % str(ex), exc_info=True)
