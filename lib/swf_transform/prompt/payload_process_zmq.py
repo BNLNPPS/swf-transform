@@ -233,8 +233,8 @@ class ZeroMQProcessor:
             socket.connect(f"ipc://{self._socket_path}")
 
             request = {
-                "input_file": os.path.abspath(filename),
-                "output_file": os.path.abspath(output_file),
+                "input_file": filename,
+                "output_file": output_file,
                 "start": fields["start"],
                 "end": fields["end"],
                 "run_id": run_id,
