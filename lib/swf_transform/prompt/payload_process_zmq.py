@@ -40,6 +40,8 @@ class ZeroMQProcessor:
         request_timeout=300,
         epic_version=None,
         epic_image=None,
+        stdout=None,
+        stderr=None
     ):
         self._socket_path = socket_path
         self._startup_timeout = startup_timeout
@@ -47,6 +49,10 @@ class ZeroMQProcessor:
         self._proc = None
         self._epic_version = epic_version
         self._epic_image = epic_image
+        self._stdout = stdout
+        self._stderr = stderr
+        self._stdout_fh = None
+        self._stderr_fh = None
         self._logger = logging.getLogger("ZeroMQProcessor")
 
     # ---------------------------------------------------------------------- #
@@ -69,12 +75,15 @@ class ZeroMQProcessor:
         self._logger.info(
             f"Starting eicrecon daemon via Singularity (socket: {self._socket_path})"
         )
+        self._stdout_fh = open(self._stdout, "w") if self._stdout else subprocess.DEVNULL
+        self._stderr_fh = open(self._stderr, "w") if self._stderr else subprocess.DEVNULL
         self._proc = subprocess.Popen(
             ["bash", "-c", script],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=self._stdout_fh,
+            stderr=self._stderr_fh,
         )
         self._logger.info(f"eicrecon daemon started with PID {self._proc.pid}")
+        self._logger.info(f"eicrecon daemon script:\n{script}")
 
     def _wait_for_socket(self):
         """Block until the socket file appears, or until startup_timeout is reached."""
@@ -84,10 +93,16 @@ class ZeroMQProcessor:
                 self._logger.info(f"Socket {self._socket_path} is ready")
                 return True
             if self._proc is not None and self._proc.poll() is not None:
-                stderr = self._proc.stderr.read().decode(errors="replace")
+                stderr_tail = ""
+                if self._stderr and os.path.exists(self._stderr):
+                    try:
+                        with open(self._stderr) as f:
+                            stderr_tail = f.read()[-500:]
+                    except Exception:
+                        pass
                 raise RuntimeError(
                     f"eicrecon exited prematurely (rc={self._proc.returncode}). "
-                    f"stderr: {stderr[-500:]}"
+                    f"stderr: {stderr_tail}"
                 )
             time.sleep(2)
         return False
@@ -180,6 +195,30 @@ class ZeroMQProcessor:
                 self._logger.info(f"Removed socket file: {self._socket_path}")
             except OSError as exc:
                 self._logger.warning(f"Could not remove socket file {self._socket_path}: {exc}")
+
+        for fh in (self._stdout_fh, self._stderr_fh):
+            try:
+                if fh and fh not in (subprocess.DEVNULL,):
+                    fh.close()
+            except Exception:
+                pass
+        self._stdout_fh = None
+        self._stderr_fh = None
+
+    def print_logs(self):
+        """Print the eicrecon stdout and stderr files to the logger."""
+        for label, path in (("stdout", self._stdout), ("stderr", self._stderr)):
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                with open(path) as f:
+                    content = f.read()
+                if content:
+                    self._logger.info(f"eicrecon {label} ({path}):\n{content}")
+                else:
+                    self._logger.info(f"eicrecon {label} ({path}): (empty)")
+            except Exception as exc:
+                self._logger.warning(f"Could not read eicrecon {label} {path}: {exc}")
 
     # ---------------------------------------------------------------------- #
     # Public API
@@ -359,12 +398,18 @@ def _get_processor(payload):
         f"(source: {'payload' if payload.get('epic_image') else 'default'})"
     )
 
+    workdir = payload.get("workdir") or os.getcwd()
+    stdout = os.path.join(workdir, "eicrecon.stdout")
+    stderr = os.path.join(workdir, "eicrecon.stderr")
+
     processor = ZeroMQProcessor(
         socket_path=socket_path,
         startup_timeout=startup_timeout,
         request_timeout=request_timeout,
         epic_version=epic_version,
         epic_image=epic_image,
+        stdout=stdout,
+        stderr=stderr
     )
     _processors[socket_path] = processor
     return processor
@@ -402,4 +447,5 @@ def terminate_zmq_processors():
     """Gracefully terminate all running ZeroMQ eicrecon daemons and clear the registry."""
     for processor in list(_processors.values()):
         processor.soft_terminate()
+        processor.print_logs()
     _processors.clear()

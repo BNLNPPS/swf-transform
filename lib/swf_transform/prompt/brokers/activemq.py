@@ -80,6 +80,8 @@ class MessagingListener(stomp.ConnectionListener):
         self.logger.warning("STOMP connection disconnected (server or transport).")
         if self.subscriber is not None:
             try:
+                if self.subscriber.graceful_stop.is_set():
+                    return
                 self.subscriber.fail()
                 self.subscriber.monitor()
             except Exception:
@@ -667,6 +669,8 @@ class Subscriber(BaseActiveMQ):
             time.sleep(poll_interval)
 
     def monitor(self):
+        if self.graceful_stop.is_set():
+            return
         try:
             if (
                 not self.conns
