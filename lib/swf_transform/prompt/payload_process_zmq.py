@@ -124,36 +124,42 @@ class ZeroMQProcessor:
             )
 
     def soft_terminate(self, hard_timeout=30):
-        """Ask the eicrecon daemon to shut down gracefully via ZeroMQ, then hard-kill if needed.
+        """Ask the eicrecon daemon to shut down gracefully via JANA Control, then hard-kill if needed.
 
-        Sends a ``{"terminate": true}`` request and waits up to *hard_timeout* seconds
-        for the process to exit.  Falls back to :meth:`terminate` if it does not.
+        Runs ``janactl quit <socket_path>`` inside the Singularity container and waits
+        up to *hard_timeout* seconds for the process to exit.  Falls back to
+        :meth:`terminate` if it does not.
         """
         if not os.path.exists(self._socket_path):
             self._logger.info("Socket does not exist; skipping soft terminate")
             return
 
-        self._logger.info(f"Sending soft-terminate request to {self._socket_path}")
-        context = zmq.Context()
-        socket = context.socket(zmq.REQ)
+        self._logger.info(f"Sending soft-terminate request via janactl to {self._socket_path}")
+        script = (
+            "set -e\n"
+            f'SINGULARITY_IMAGE="{self._epic_image}"\n'
+            "singularity exec \\\n"
+            "  -B /cvmfs:/cvmfs \\\n"
+            '  "${SINGULARITY_IMAGE}" \\\n'
+            "  /bin/bash -c \"\n"
+            "set -e\n"
+            f"source /opt/detector/epic-{self._epic_version}/bin/thisepic.sh\n"
+            f"janactl quit {self._socket_path}\"\n"
+        )
         try:
-            socket.setsockopt(zmq.SNDTIMEO, 5000)
-            socket.setsockopt(zmq.RCVTIMEO, 10000)
-            socket.connect(f"ipc://{self._socket_path}")
-            socket.send_string(json.dumps({"terminate": True}))
-            try:
-                response_str = socket.recv_string()
-                self._logger.info(f"Soft-terminate response: {response_str}")
-            except zmq.Again:
-                self._logger.warning("No response to soft-terminate request")
-        except zmq.ZMQError as exc:
-            self._logger.warning(f"ZMQ error during soft terminate: {exc}")
-        finally:
-            try:
-                socket.close()
-                context.term()
-            except Exception:
-                pass
+            subprocess.run(
+                ["bash", "-c", script],
+                timeout=hard_timeout,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            self._logger.info("janactl quit completed")
+        except subprocess.TimeoutExpired:
+            self._logger.warning("janactl quit did not complete in time")
+        except subprocess.CalledProcessError as exc:
+            output = exc.output.decode(errors="replace") if exc.output else ""
+            self._logger.warning(f"janactl quit failed (rc={exc.returncode}): {output}")
 
         # Wait for the process to exit on its own
         if self._proc is not None:
