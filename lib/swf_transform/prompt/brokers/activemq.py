@@ -12,6 +12,7 @@
 import logging
 import json
 import os
+import queue
 import random
 import socket
 import threading
@@ -53,6 +54,9 @@ class MessagingListener(stomp.ConnectionListener):
         super(MessagingListener, self).__init__()
         # self.name = "MessagingListener"
         self.__broker = broker
+        # public alias so subclasses (defined outside this class body, and thus
+        # subject to different name-mangling) can reach the broker address too
+        self.broker_info = broker
         self.handler = handler
         self.handler_kwargs = handler_kwargs
         self.conn = conn
@@ -120,19 +124,25 @@ class MessagingListener(stomp.ConnectionListener):
             frame.headers,
             frame.body
         )
-        headers = frame.headers
         # Snapshot connection generation so we can detect a reconnect during processing
         recv_generation = self.subscriber.connection_generation if self.subscriber is not None else None
-        try:
-            if self.subscriber is not None:
-                try:
-                    self.subscriber.is_processing_message = True
-                except Exception:
-                    pass
+        if self.subscriber is not None:
+            try:
+                self.subscriber.is_processing_message = True
+            except Exception:
+                pass
 
-            self.logger.info(f"[broker] [{self.__broker}]: Handling message ID {frame.headers.get('message-id')}")
+        self._process_message(frame, recv_generation)
+
+    def _process_message(self, frame, recv_generation):
+        """Handle *frame* and ack/nack it. Shared by :class:`MessagingListener` and
+        :class:`MessagingListenerThread` (called either inline or from the worker thread).
+        """
+        headers = frame.headers
+        try:
+            self.logger.info(f"[broker] [{self.broker_info}]: Handling message ID {frame.headers.get('message-id')}")
             self.handler(headers, json.loads(frame.body), self.handler_kwargs)
-            self.logger.info(f"[broker] [{self.__broker}]: Handled message ID {frame.headers.get('message-id')} successfully")
+            self.logger.info(f"[broker] [{self.broker_info}]: Handled message ID {frame.headers.get('message-id')} successfully")
 
             # STOMP 1.2: ACK id must match the MESSAGE frame's 'ack' header, not 'message-id'
             ack_id = frame.headers.get("ack") or frame.headers["message-id"]
@@ -141,25 +151,25 @@ class MessagingListener(stomp.ConnectionListener):
                 # The broker session changed while the payload was running (disconnect + reconnect).
                 # The old session's pending ACK is gone; the broker will redeliver on the new session.
                 self.logger.warning(
-                    f"[broker] [{self.__broker}]: Connection reconnected during processing of message {frame.headers.get('message-id')} "
+                    f"[broker] [{self.broker_info}]: Connection reconnected during processing of message {frame.headers.get('message-id')} "
                     f"(generation {recv_generation} → {cur_generation}); skipping ACK — broker will redeliver"
                 )
             else:
-                self.logger.info(f"[broker] [{self.__broker}]: Acknowledging message ID {frame.headers.get('message-id')}")
+                self.logger.info(f"[broker] [{self.broker_info}]: Acknowledging message ID {frame.headers.get('message-id')}")
                 self.conn.ack(ack_id)
-                self.logger.info(f"[broker] [{self.__broker}]: Message ID {frame.headers.get('message-id')} acknowledged")
+                self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} acknowledged")
         except Exception as ex:
-            self.logger.error(f"[broker] [{self.__broker}]: Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
+            self.logger.error(f"[broker] [{self.broker_info}]: Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
             # Attempt to nack using flexible signatures; if transport is gone,
             # trigger reconnect via subscriber.monitor().
             try:
-                self.logger.info(f"[broker] [{self.__broker}]: Negotiating NACK for message ID {frame.headers.get('message-id')}")
+                self.logger.info(f"[broker] [{self.broker_info}]: Negotiating NACK for message ID {frame.headers.get('message-id')}")
                 nack_id = frame.headers.get("ack") or frame.headers["message-id"]
                 self.conn.nack(nack_id)
-                self.logger.info(f"[broker] [{self.__broker}]: Message ID {frame.headers.get('message-id')} nacked")
+                self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} nacked")
             except Exception:
                 # If nack is unavailable or fails, log and move on.
-                self.logger.exception(f"[broker] [{self.__broker}]: nack failed")
+                self.logger.exception(f"[broker] [{self.broker_info}]: nack failed")
 
             if self.subscriber is not None:
                 self.subscriber.fail()
@@ -171,6 +181,105 @@ class MessagingListener(stomp.ConnectionListener):
                 self.subscriber.is_processing_message = False
             except Exception:
                 pass
+
+
+class MessagingListenerThread(MessagingListener):
+    """
+    Messaging Listener that hands message processing off to a background worker thread.
+
+    ``on_message`` only enqueues the received frame and returns immediately, so the
+    stomp.py receiver thread — which also drives STOMP heartbeats — is never blocked
+    by slow message handling. A single dedicated worker thread pulls frames off the
+    queue and processes (handles + acks/nacks) them one at a time, via the same
+    :meth:`MessagingListener._process_message` logic used by the synchronous listener.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super(MessagingListenerThread, self).__init__(*args, **kwargs)
+        self._queue = queue.Queue()
+        self.graceful_stop = threading.Event()
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            name=f"{self.__class__.__name__}-{self.broker_info}",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def on_message(self, frame):
+        self.logger.info(
+            "[broker] [%s]: received message: headers: %s, body: %s",
+            self.broker_info,
+            frame.headers,
+            frame.body,
+        )
+        # Mark as processing immediately (before the worker thread picks it up) so
+        # idle detection does not consider the subscriber idle while a message
+        # is queued/in flight.
+        if self.subscriber is not None:
+            try:
+                self.subscriber.is_processing_message = True
+            except Exception:
+                pass
+
+        recv_generation = self.subscriber.connection_generation if self.subscriber is not None else None
+        self._queue.put((frame, recv_generation))
+
+    def on_disconnected(self):
+        super(MessagingListenerThread, self).on_disconnected()
+        # Queued messages were received on the connection that just dropped, so they
+        # can no longer be acked on it — drop them now rather than processing them
+        # for nothing; the broker will redeliver once we reconnect and resubscribe.
+        dropped = self._drain_queue()
+        if dropped:
+            self.logger.warning(
+                f"[broker] [{self.broker_info}]: dropped {dropped} queued message(s) after "
+                "disconnect (cannot be acked on the old connection; broker will redeliver)"
+            )
+        if self.subscriber is not None:
+            try:
+                self.subscriber.is_processing_message = False
+            except Exception:
+                pass
+
+    def _drain_queue(self):
+        dropped = 0
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self._queue.task_done()
+            dropped += 1
+        return dropped
+
+    def _worker_loop(self):
+        while not self.graceful_stop.is_set():
+            try:
+                frame, recv_generation = self._queue.get(timeout=1)
+            except queue.Empty:
+                continue
+            try:
+                self._process_message(frame, recv_generation)
+            except Exception:
+                self.logger.exception(
+                    f"[broker] [{self.broker_info}]: unexpected error while processing queued message"
+                )
+            finally:
+                self._queue.task_done()
+
+    def stop(self, timeout=10):
+        """Signal the worker thread to stop and wait for it to exit.
+
+        Called when the owning subscriber is terminated, so the worker thread
+        does not keep running after the connection it acks/nacks against has
+        been torn down.
+        """
+        self.graceful_stop.set()
+        self._worker.join(timeout=timeout)
+        if self._worker.is_alive():
+            self.logger.warning(
+                f"[broker] [{self.broker_info}]: worker thread did not stop within {timeout}s"
+            )
 
 
 class BaseActiveMQ(object):
@@ -529,6 +638,11 @@ class Subscriber(BaseActiveMQ):
         self.idle_seconds = int(kwargs.get("idle_seconds", 5))
 
         self.is_processing_message = False
+
+    def stop(self):
+        super(Subscriber, self).stop()
+        if self.listener is not None and hasattr(self.listener, "stop"):
+            self.listener.stop()
 
     def get_listener(self, broker, conn):
         if self.listener is None:
