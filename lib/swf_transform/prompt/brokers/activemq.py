@@ -593,7 +593,10 @@ class Subscriber(BaseActiveMQ):
 
         # update last_message_at when subscription is established
         try:
-            self.last_message_at = time.time()
+            # should not update last_message_at here, as it may interfere with idle detection; only update on actual message receipt
+            # this functiion can be called multiple times during reconnects, so we only want to update last_message_at on actual message receipt
+            # self.last_message_at = time.time()
+            pass
         except Exception:
             pass
 

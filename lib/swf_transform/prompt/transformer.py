@@ -420,6 +420,8 @@ class Transformer:
         :returns ret: 0 if run successfully.
         """
         try:
+            self.logger.info("Starting transformer run loop, idle_timeout=%s, run_id=%s, workdir=%s, namespace=%s",
+                             self.idle_timeout, self._run_id, self._workdir, self._namespace)
             if not self.init_brokers():
                 self.logger.error("Brokers are not initialized, cannot run transformer")
                 return False
