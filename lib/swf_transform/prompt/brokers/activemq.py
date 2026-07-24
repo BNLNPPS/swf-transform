@@ -744,7 +744,7 @@ class Subscriber(BaseActiveMQ):
 
     def get_listener(self, broker, conn):
         if self.listener is None:
-            self.listener = MessagingListener(
+            self.listener = MessagingListenerThread(
                 broker,
                 namespace=self.namespace,
                 handler=self.handler,
