@@ -46,6 +46,7 @@ class Transformer:
         self._namespace = namespace
         self._to_stop = False
         self.idle_timeout = idle_timeout
+        self.transformer_subscriber = None
 
         self.last_message_time = time.time()
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -350,6 +351,22 @@ class Transformer:
             if isinstance(handler_kwargs, dict):
                 result_publisher = handler_kwargs.get("result_publisher")
 
+                # First message received without a pre-assigned run_id: lock the
+                # subscriber onto this run so further messages for other runs on
+                # the same queue are filtered out broker-side.
+                if run_id and not self._run_id:
+                    if self.transformer_subscriber is not None:
+                        try:
+                            self.transformer_subscriber.update_selector(f"run_id = '{run_id}'")
+                            self.logger.info(
+                                f"No run_id was pre-assigned; locking transformer subscriber to run_id={run_id} from first message"
+                            )
+                        except Exception:
+                            self.logger.exception(
+                                f"Failed to update transformer subscriber selector for run_id={run_id}"
+                            )
+                    self._run_id = run_id
+
             processing_start_at = datetime.datetime.utcnow().isoformat()
             status = False
             result = None
@@ -453,6 +470,7 @@ class Transformer:
                 name="SliceSubscriber",
                 with_listener_thread=True,
             )
+            self.transformer_subscriber = transformer_subscriber
 
             _last_idle_log_at = None  # None means the first log hasn't been emitted yet
 

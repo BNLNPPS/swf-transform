@@ -830,29 +830,22 @@ class Subscriber(BaseActiveMQ):
             raise
         # conn.start()
 
-        # conn.subscribe(destination=self.broker['destination'], id=f'{self.internal_id}',
-        #                ack='client-individual', headers={'activemq.prefetchSize': '1'})
+        self._send_subscribe(conn, broker_info)
+
+    def _build_selector(self):
         # Build a broker-side selector so filtering happens before delivery.
         if self.namespace is not None:
             if self.selector:
                 # Quote namespace to handle string values in selectors
-                selector = f"namespace='{self.namespace}' AND ({self.selector})"
-            else:
-                selector = f"namespace='{self.namespace}'"
+                return f"namespace='{self.namespace}' AND ({self.selector})"
+            return f"namespace='{self.namespace}'"
         else:
             if self.selector:
-                selector = f"{self.selector}"
-            else:
-                selector = None
+                return f"{self.selector}"
+            return None
 
-        # update last_message_at when subscription is established
-        try:
-            # should not update last_message_at here, as it may interfere with idle detection; only update on actual message receipt
-            # this functiion can be called multiple times during reconnects, so we only want to update last_message_at on actual message receipt
-            # self.last_message_at = time.time()
-            pass
-        except Exception:
-            pass
+    def _send_subscribe(self, conn, broker_info):
+        selector = self._build_selector()
 
         headers = {
             "subscription-name": self.internal_id,
@@ -881,6 +874,23 @@ class Subscriber(BaseActiveMQ):
         for conn in self.conns:
             if not conn.is_connected():
                 self.subscribe_conn(conn)
+
+    def update_selector(self, selector):
+        """Narrow the broker-side selector (e.g. once a run_id becomes known from the
+        first received message) and re-subscribe already-connected connections so it
+        takes effect immediately, rather than waiting for the next reconnect.
+        """
+        self.selector = selector
+        for conn in list(self.conns):
+            try:
+                if conn.is_connected():
+                    broker_info = getattr(conn, "_broker_info", "unknown")
+                    conn.unsubscribe(id=f"{self.internal_id}")
+                    self._send_subscribe(conn, broker_info)
+            except Exception:
+                self.logger.exception(
+                    f"[broker] [{self.name}]: failed to re-subscribe with updated selector: {selector}"
+                )
 
     def idle_elapsed(self):
         """Return how many seconds have elapsed since the last message (i.e. the current idle duration)."""
