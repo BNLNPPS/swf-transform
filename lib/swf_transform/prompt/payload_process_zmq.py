@@ -282,6 +282,8 @@ class ZeroMQProcessor:
                 "output_file": output_file,
                 "start": fields["start"],
                 "end": fields["end"],
+                "nskip": fields["start"],
+                "nevents": fields["tf_count"]
                 "run_id": run_id,
             }
             self._logger.info(f"Sending ZeroMQ request: {request}")

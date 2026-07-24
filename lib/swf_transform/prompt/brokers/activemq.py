@@ -9,6 +9,7 @@
 # - Wen Guan, <wen.guan@cern.ch>, 2025
 
 
+import inspect
 import logging
 import json
 import os
@@ -134,11 +135,28 @@ class MessagingListener(stomp.ConnectionListener):
 
         self._process_message(frame, recv_generation)
 
+    def _ack_or_nack(self, method_name, msg_id, subscription_id):
+        """Call conn.ack()/conn.nack() with the right arity for the negotiated STOMP
+        version. STOMP 1.1 requires (id, subscription, ...); STOMP 1.2 requires just
+        (id, ...) since the 'ack' header value alone identifies the subscription.
+        """
+        method = getattr(self.conn, method_name)
+        params = inspect.signature(method).parameters
+        if "subscription" in params:
+            method(msg_id, subscription_id)
+        else:
+            method(msg_id)
+
     def _process_message(self, frame, recv_generation):
         """Handle *frame* and ack/nack it. Shared by :class:`MessagingListener` and
         :class:`MessagingListenerThread` (called either inline or from the worker thread).
         """
         headers = frame.headers
+        # The broker echoes back the subscription id from our SUBSCRIBE frame on every
+        # MESSAGE; fall back to the subscriber's own id (used as the subscribe id) if absent.
+        subscription_id = frame.headers.get("subscription") or (
+            self.subscriber.internal_id if self.subscriber is not None else None
+        )
         try:
             self.logger.info(f"[broker] [{self.broker_info}]: Handling message ID {frame.headers.get('message-id')}")
             self.handler(headers, json.loads(frame.body), self.handler_kwargs)
@@ -156,7 +174,7 @@ class MessagingListener(stomp.ConnectionListener):
                 )
             else:
                 self.logger.info(f"[broker] [{self.broker_info}]: Acknowledging message ID {frame.headers.get('message-id')}")
-                self.conn.ack(ack_id)
+                self._ack_or_nack("ack", ack_id, subscription_id)
                 self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} acknowledged")
         except Exception as ex:
             self.logger.error(f"[broker] [{self.broker_info}]: Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
@@ -165,7 +183,7 @@ class MessagingListener(stomp.ConnectionListener):
             try:
                 self.logger.info(f"[broker] [{self.broker_info}]: Negotiating NACK for message ID {frame.headers.get('message-id')}")
                 nack_id = frame.headers.get("ack") or frame.headers["message-id"]
-                self.conn.nack(nack_id)
+                self._ack_or_nack("nack", nack_id, subscription_id)
                 self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} nacked")
             except Exception:
                 # If nack is unavailable or fails, log and move on.
