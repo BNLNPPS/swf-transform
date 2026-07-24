@@ -432,9 +432,12 @@ class Transformer:
                 broker=self._transformer_broadcast_broker,
                 handler=self.transformer_broadcast_handler,
                 namespace=self._namespace,
+                name="TFBroadcastSubscriber",
             )
             result_publisher = Publisher(
-                broker=self._result_broker, namespace=self._namespace
+                broker=self._result_broker,
+                namespace=self._namespace,
+                name="ResultPublisher",
             )
 
             selector = None
@@ -447,6 +450,8 @@ class Transformer:
                 selector=selector,
                 namespace=self._namespace,
                 handler_kwargs={"result_publisher": result_publisher},
+                name="SliceSubscriber",
+                with_listener_thread=True,
             )
 
             _last_idle_log_at = None  # None means the first log hasn't been emitted yet

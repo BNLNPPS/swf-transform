@@ -48,12 +48,15 @@ class MessagingListener(stomp.ConnectionListener):
         logger=None,
         subscriber=None,
         namespace=None,
+        name="MessagingListener",
     ):
         """
         __init__
         """
         super(MessagingListener, self).__init__()
-        # self.name = "MessagingListener"
+        self.name = name
+        if self.name and not self.name.endswith("Listener"):
+            self.name += "Listener"
         self.__broker = broker
         # public alias so subclasses (defined outside this class body, and thus
         # subject to different name-mangling) can reach the broker address too
@@ -68,7 +71,7 @@ class MessagingListener(stomp.ConnectionListener):
         if logger:
             self.logger = logger
         else:
-            self.logger = logging.getLogger(self.__class__.__name__)
+            self.logger = logging.getLogger(self.name if self.name else self.__class__.__name__)
 
     def on_error(self, frame):
         """
@@ -118,7 +121,15 @@ class MessagingListener(stomp.ConnectionListener):
         if self.subscriber is not None:
             self.subscriber.fail()
 
+    def _is_heartbeat(self, frame):
+        _HEARTBEAT_MSG_TYPES = {"heartbeat", "heart-beat", "heart_beat"}
+        msg_type = frame.headers.get("msg_type")
+        return isinstance(msg_type, str) and msg_type.lower() in _HEARTBEAT_MSG_TYPES
+
     def on_message(self, frame):
+        if self._is_heartbeat(frame):
+            pass
+
         self.logger.info(
             "[broker] [%s]: received message: headers: %s, body: %s",
             self.__broker,
@@ -162,32 +173,44 @@ class MessagingListener(stomp.ConnectionListener):
             self.handler(headers, json.loads(frame.body), self.handler_kwargs)
             self.logger.info(f"[broker] [{self.broker_info}]: Handled message ID {frame.headers.get('message-id')} successfully")
 
-            # STOMP 1.2: ACK id must match the MESSAGE frame's 'ack' header, not 'message-id'
-            ack_id = frame.headers.get("ack") or frame.headers["message-id"]
-            cur_generation = self.subscriber.connection_generation if self.subscriber is not None else recv_generation
-            if recv_generation is not None and recv_generation != cur_generation:
-                # The broker session changed while the payload was running (disconnect + reconnect).
-                # The old session's pending ACK is gone; the broker will redeliver on the new session.
-                self.logger.warning(
-                    f"[broker] [{self.broker_info}]: Connection reconnected during processing of message {frame.headers.get('message-id')} "
-                    f"(generation {recv_generation} → {cur_generation}); skipping ACK — broker will redeliver"
+            # A subscription made with ack='auto' is auto-acknowledged by the broker on
+            # delivery; sending an explicit ACK/NACK for it is invalid, so skip it.
+            if frame.headers.get("ack") == "auto":
+                self.logger.info(
+                    f"[broker] [{self.broker_info}]: ack header is 'auto' for message ID {frame.headers.get('message-id')}; skipping explicit ACK"
                 )
             else:
-                self.logger.info(f"[broker] [{self.broker_info}]: Acknowledging message ID {frame.headers.get('message-id')}")
-                self._ack_or_nack("ack", ack_id, subscription_id)
-                self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} acknowledged")
+                # STOMP 1.2: ACK id must match the MESSAGE frame's 'ack' header, not 'message-id'
+                ack_id = frame.headers.get("ack") or frame.headers["message-id"]
+                cur_generation = self.subscriber.connection_generation if self.subscriber is not None else recv_generation
+                if recv_generation is not None and recv_generation != cur_generation:
+                    # The broker session changed while the payload was running (disconnect + reconnect).
+                    # The old session's pending ACK is gone; the broker will redeliver on the new session.
+                    self.logger.warning(
+                        f"[broker] [{self.broker_info}]: Connection reconnected during processing of message {frame.headers.get('message-id')} "
+                        f"(generation {recv_generation} → {cur_generation}); skipping ACK — broker will redeliver"
+                    )
+                else:
+                    self.logger.info(f"[broker] [{self.broker_info}]: Acknowledging message ID {frame.headers.get('message-id')}")
+                    self._ack_or_nack("ack", ack_id, subscription_id)
+                    self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} acknowledged")
         except Exception as ex:
             self.logger.error(f"[broker] [{self.broker_info}]: Failed to handle message {frame.headers.get('message-id')}: {ex}", exc_info=True)
-            # Attempt to nack using flexible signatures; if transport is gone,
-            # trigger reconnect via subscriber.monitor().
-            try:
-                self.logger.info(f"[broker] [{self.broker_info}]: Negotiating NACK for message ID {frame.headers.get('message-id')}")
-                nack_id = frame.headers.get("ack") or frame.headers["message-id"]
-                self._ack_or_nack("nack", nack_id, subscription_id)
-                self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} nacked")
-            except Exception:
-                # If nack is unavailable or fails, log and move on.
-                self.logger.exception(f"[broker] [{self.broker_info}]: nack failed")
+            if frame.headers.get("ack") == "auto":
+                self.logger.info(
+                    f"[broker] [{self.broker_info}]: ack header is 'auto' for message ID {frame.headers.get('message-id')}; skipping explicit NACK"
+                )
+            else:
+                # Attempt to nack using flexible signatures; if transport is gone,
+                # trigger reconnect via subscriber.monitor().
+                try:
+                    self.logger.info(f"[broker] [{self.broker_info}]: Negotiating NACK for message ID {frame.headers.get('message-id')}")
+                    nack_id = frame.headers.get("ack") or frame.headers["message-id"]
+                    self._ack_or_nack("nack", nack_id, subscription_id)
+                    self.logger.info(f"[broker] [{self.broker_info}]: Message ID {frame.headers.get('message-id')} nacked")
+                except Exception:
+                    # If nack is unavailable or fails, log and move on.
+                    self.logger.exception(f"[broker] [{self.broker_info}]: nack failed")
 
             if self.subscriber is not None:
                 self.subscriber.fail()
@@ -218,12 +241,15 @@ class MessagingListenerThread(MessagingListener):
         self.graceful_stop = threading.Event()
         self._worker = threading.Thread(
             target=self._worker_loop,
-            name=f"{self.__class__.__name__}-{self.broker_info}",
+            name=f"{self.name}Worker",
             daemon=True,
         )
         self._worker.start()
 
     def on_message(self, frame):
+        if self._is_heartbeat(frame):
+            pass
+
         self.logger.info(
             "[broker] [%s]: received message: headers: %s, body: %s",
             self.broker_info,
@@ -314,7 +340,7 @@ class BaseActiveMQ(object):
 
         self.logger = logger
         self.name = name
-        self.setup_logger(self.logger)
+        self.setup_logger(self.logger, self.name)
         self.namespace = namespace
 
         self.has_connection_failures = False
@@ -352,11 +378,11 @@ class BaseActiveMQ(object):
             )
             self._heartbeat_thread.start()
 
-    def setup_logger(self, logger):
+    def setup_logger(self, logger, name):
         if logger:
             self.logger = logger
         else:
-            logger_name = self.name if self.name else f"{self.__class__.__name__}"
+            logger_name = name if name else f"{self.__class__.__name__}"
             self.logger = logging.getLogger(logger_name)
 
     def get_logger(self):
@@ -713,6 +739,7 @@ class Subscriber(BaseActiveMQ):
         handler=None,
         handler_kwargs=None,
         selector=None,
+        with_listener_thread=False,
         **kwargs,
     ):
         super(Subscriber, self).__init__(
@@ -736,6 +763,7 @@ class Subscriber(BaseActiveMQ):
         self.idle_seconds = int(kwargs.get("idle_seconds", 5))
 
         self.is_processing_message = False
+        self.with_listener_thread = with_listener_thread
 
     def stop(self):
         super(Subscriber, self).stop()
@@ -744,15 +772,28 @@ class Subscriber(BaseActiveMQ):
 
     def get_listener(self, broker, conn):
         if self.listener is None:
-            self.listener = MessagingListenerThread(
-                broker,
-                namespace=self.namespace,
-                handler=self.handler,
-                handler_kwargs=self.handler_kwargs,
-                conn=conn,
-                logger=self.logger,
-                subscriber=self,
-            )
+            if not self.with_listener_thread:
+                self.listener = MessagingListener(
+                    broker,
+                    namespace=self.namespace,
+                    handler=self.handler,
+                    handler_kwargs=self.handler_kwargs,
+                    conn=conn,
+                    # logger=self.logger,
+                    subscriber=self,
+                    name=self.name,
+                )
+            else:
+                self.listener = MessagingListenerThread(
+                    broker,
+                    namespace=self.namespace,
+                    handler=self.handler,
+                    handler_kwargs=self.handler_kwargs,
+                    conn=conn,
+                    # logger=self.logger,
+                    subscriber=self,
+                    name=self.name,
+                )
         return self.listener
 
     def subscribe_conn(self, conn):
