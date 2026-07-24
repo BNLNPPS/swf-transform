@@ -48,6 +48,7 @@ if [ -f ${current_dir}/x509_proxy ]; then
 fi
 
 export PANDA_CLIENT_VERBOSE=true
+export ARTEMIS_SSL_CA_CERTS=${current_dir}/conf/full-chain.pem
 echo "Environment variables:"
 env
 

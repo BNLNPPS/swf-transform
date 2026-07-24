@@ -395,6 +395,14 @@ class BaseActiveMQ(object):
         use_ssl = self.broker.get("use_ssl", False)
         ssl_ca_certs = self.broker.get("ssl_ca_certs", None)
 
+        if not ssl_ca_certs:
+            env_ca_certs = os.environ.get("ARTEMIS_SSL_CA_CERTS")
+            if env_ca_certs and os.path.exists(env_ca_certs):
+                ssl_ca_certs = env_ca_certs
+                self.logger.info(
+                    f"Using CA certificates from ARTEMIS_SSL_CA_CERTS: {ssl_ca_certs}"
+                )
+
         self.logger.info(
             f"SSL configuration: use_ssl={use_ssl}, ssl_ca_certs={ssl_ca_certs}"
         )
@@ -419,9 +427,9 @@ class BaseActiveMQ(object):
             self.logger.debug(
                 f"Creating connection to {broker}:{port} (SSL: {use_ssl})"
             )
-            conn = stomp.Connection12(
+            conn = stomp.Connection(
                 host_and_ports=[(broker, port)],
-                keepalive=True,
+                vhost=broker,
                 try_loopback_connect=False,
                 auto_content_length=False,
                 # Shorter heartbeats (ms) so client/broker detect dead peers faster
