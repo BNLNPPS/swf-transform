@@ -319,6 +319,21 @@ class BaseActiveMQ(object):
         self.cache = TTLCache(maxsize=200, ttl=86400)  # cache expiration 86400 seconds
         self.graceful_stop = threading.Event()
 
+        # App-level liveness heartbeat: periodically publish a small keepalive
+        # message so external monitors can tell this process is alive. Distinct
+        # from the STOMP protocol heartbeats (heart-beat header) which only prove
+        # the TCP connection is up, not that this process is making progress.
+        self.heartbeat_destination = self.broker.get("destination") if self.broker else None
+        self.heartbeat_interval = int(self.broker.get("heartbeat_interval", 30)) if self.broker else 30
+        self._heartbeat_thread = None
+        if self.heartbeat_destination:
+            self._heartbeat_thread = threading.Thread(
+                target=self._heartbeat_loop,
+                name=f"{self.name}-heartbeat",
+                daemon=True,
+            )
+            self._heartbeat_thread.start()
+
     def setup_logger(self, logger):
         if logger:
             self.logger = logger
@@ -329,8 +344,63 @@ class BaseActiveMQ(object):
     def get_logger(self):
         return self.logger
 
+    def _heartbeat_loop(self):
+        # wait() first so we don't send a heartbeat before the first connection is established
+        while not self.graceful_stop.wait(self.heartbeat_interval):
+            try:
+                self.send_heartbeat()
+            except Exception:
+                self.logger.exception(f"[broker] [{self.name}]: unexpected error while sending heartbeat")
+
+    def _get_connected_conn(self):
+        # Only reuse a connection that is already established through the normal
+        # connect/subscribe flow; never open or subscribe a connection here, that
+        # would race with Subscriber.subscribe()'s own connect/subscribe handling.
+        for conn in list(self.conns):
+            try:
+                if conn.is_connected():
+                    return conn
+            except Exception:
+                continue
+        return None
+
+    def send_heartbeat(self):
+        """Publish a lightweight liveness message to heartbeat_destination. Best-effort:
+        failures are logged, not raised, and no connection is opened just for this."""
+        conn = self._get_connected_conn()
+        if not conn:
+            self.logger.debug(f"[broker] [{self.name}]: skipping heartbeat, no connected connection yet")
+            return
+
+        try:
+            conn.send(
+                body=json.dumps(
+                    {
+                        "msg_type": "heartbeat",
+                        "internal_id": self.internal_id,
+                        "namespace": self.namespace,
+                        "timestamp": time.time(),
+                    }
+                ),
+                destination=self.heartbeat_destination,
+                id=self.internal_id,
+                ack="auto",
+                headers={
+                    "persistent": "false",
+                    "vo": "eic",
+                    "msg_type": "heartbeat",
+                    "namespace": self.namespace or "",
+                    "client-id": self.internal_id,
+                },
+            )
+            self.logger.debug(f"[broker] [{self.name}]: heartbeat sent to {self.heartbeat_destination}")
+        except Exception as ex:
+            self.logger.warning(f"[broker] [{self.name}]: failed to send heartbeat: {ex}")
+
     def stop(self):
         self.graceful_stop.set()
+        if self._heartbeat_thread is not None:
+            self._heartbeat_thread.join(timeout=5)
         self.disconnect(self.conns)
 
     def connect_to_messaging_brokers(self, sender=True):
@@ -478,7 +548,8 @@ class BaseActiveMQ(object):
                         self.broker["username"],
                         self.broker["password"],
                         wait=True,
-                        headers={"client-id": self.internal_id},
+                        version='1.1',
+                        headers={"client-id": self.internal_id, "heart-beat": "30000,30000"},
                     )
                 # conn.start()
                 return conn
@@ -498,7 +569,8 @@ class BaseActiveMQ(object):
                     self.broker["username"],
                     self.broker["password"],
                     wait=True,
-                    headers={"client-id": self.internal_id},
+                    version='1.1',
+                    headers={"client-id": self.internal_id, "heart-beat": "30000,30000"},
                 )
                 # conn.start()
             return conn
@@ -686,7 +758,8 @@ class Subscriber(BaseActiveMQ):
                 self.broker["username"],
                 self.broker["password"],
                 wait=True,
-                headers={"client-id": self.internal_id},
+                version='1.1',
+                headers={"client-id": self.internal_id, "heart-beat": "30000,30000"},
             )
             self.logger.info(f"Successfully connected to: {broker_info}")
         except Exception as ex:
