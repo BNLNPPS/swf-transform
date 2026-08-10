@@ -47,7 +47,7 @@ cd $workdir
 mkdir lib_py
 # for libname in idds pandaclient pandatools tabulate pyjwt requests urllib3 argcomplete cryptography packaging anytree networkx; do
 # for libname in idds pandaclient pandatools tabulate jwt requests urllib3 argcomplete cryptography packaging stomp cffi charset_normalizer docopt.py idna pycparser six.py websocket _cffi_backend*; do
-for libname in idds pandaclient pandatools tabulate requests urllib3 argcomplete stomp websocket charset_normalizer idna certifi packaging cachetools zmq pyzmq.libs swf_transform; do
+for libname in idds pandaclient pandatools tabulate requests urllib3 argcomplete stomp websocket charset_normalizer idna certifi packaging cachetools zmq pyzmq.libs swf_transform httpx httpcore h11 anyio rich pygments markdown_it mdurl exceptiongroup typing_extensions; do
     echo cp -fr ${python_lib_path}/$libname lib_py
     cp -fr ${python_lib_path}/$libname lib_py
 done
