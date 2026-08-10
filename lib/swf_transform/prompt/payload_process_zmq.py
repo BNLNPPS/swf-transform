@@ -356,14 +356,20 @@ class ZeroMQProcessor:
         # ------------------------------------------------------------------ #
         # Return enriched payload
         # ------------------------------------------------------------------ #
-        processed_payload = payload.copy()
-        processed_payload["processed"] = True
-        processed_payload["actual_processing_time"] = elapsed
-        processed_payload["output_file"] = dest_file or output_file
-        processed_payload["output_filename"] = output_filename
-        processed_payload["events_processed"] = response.get("events_processed")
-        processed_payload["epic_version"] = version
-        processed_payload["state"] = "processed"
+        processed_payload = {
+            "origin_message": payload.copy(),
+            "state": "processed",
+            "processed": True,
+            "payload_result": {
+                "output_file": dest_file or output_file,
+                "output_filename": output_filename,
+            },
+            "metrics": {
+                "actual_processing_time": elapsed,
+                "nevents_processed": response.get("events_processed"),
+                "epic_version": version,
+            },
+        }
 
         return True, processed_payload, None
 

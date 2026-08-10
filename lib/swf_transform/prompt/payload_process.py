@@ -78,8 +78,9 @@ def process_payload_fake(payload):
     Returns
     -------
     status : bool   Always ``True``.
-    result : dict   Copy of *payload* enriched with ``processed`` and
-                    ``actual_processing_time``.
+    result : dict   ``{"origin_message": <payload copy>, "state", "processed",
+                    "payload_result": {"output_file", "output_filename"},
+                    "metrics": {...}}``.
     error  : str    Always ``None``.
     """
     logger = logging.getLogger("PayloadProcessor")
@@ -143,12 +144,18 @@ def process_payload_fake(payload):
         except OSError as exc:
             logger.warning(f"Could not create output file {output_file}: {exc}")
 
-    processed_payload = payload.copy()
-    processed_payload["processed"] = True
-    processed_payload["actual_processing_time"] = elapsed
-    processed_payload["output_file"] = output_file
-    processed_payload["output_filename"] = output_filename
-    processed_payload["state"] = 'processed'
+    processed_payload = {
+        "origin_message": payload.copy(),
+        "state": "processed",
+        "processed": True,
+        "payload_result": {
+            "output_file": output_file,
+            "output_filename": output_filename,
+        },
+        "metrics": {
+            "actual_processing_time": elapsed,
+        },
+    }
 
     return True, processed_payload, None
 
@@ -175,8 +182,9 @@ def process_payload_eicrecon(payload):
     Returns
     -------
     status : bool   True on success, False on failure.
-    result : dict   Copy of *payload* enriched with processing metadata,
-                    or None on failure.
+    result : dict   ``{"origin_message": <payload copy>, "state", "processed",
+                    "payload_result": {"output_file", "output_filename"},
+                    "metrics": {...}}``, or None on failure.
     error  : str    Human-readable error message, or None on success.
     """
     logger = logging.getLogger("PayloadProcessor")
@@ -279,14 +287,20 @@ def process_payload_eicrecon(payload):
         # ------------------------------------------------------------ #
         # Success — enrich result dict
         # ------------------------------------------------------------ #
-        processed_payload = payload.copy()
-        processed_payload["processed"] = True
-        processed_payload["actual_processing_time"] = elapsed
-        processed_payload["output_file"] = dest_file or output_file
-        processed_payload["output_filename"] = output_filename
-        processed_payload["nevents_processed"] = nevents
-        processed_payload["epic_version"] = version
-        processed_payload["state"] = 'processed'
+        processed_payload = {
+            "origin_message": payload.copy(),
+            "state": "processed",
+            "processed": True,
+            "payload_result": {
+                "output_file": dest_file or output_file,
+                "output_filename": output_filename,
+            },
+            "metrics": {
+                "actual_processing_time": elapsed,
+                "nevents_processed": nevents,
+                "epic_version": version,
+            },
+        }
 
         return True, processed_payload, None
 
