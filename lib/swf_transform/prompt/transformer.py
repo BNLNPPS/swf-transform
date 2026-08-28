@@ -35,7 +35,7 @@ setup_logging(__name__)
 
 
 class Transformer:
-    def __init__(self, run_id=None, workdir=None, namespace=None, idle_timeout=1800):
+    def __init__(self, run_id=None, workdir=None, namespace=None, idle_timeout=1800, stream_mode=None):
         self._transformer_broker = None
         self._transformer_broadcast_broker = None
         self._result_broker = None
@@ -46,6 +46,7 @@ class Transformer:
         self._namespace = namespace
         self._to_stop = False
         self.idle_timeout = idle_timeout
+        self.stream_mode = stream_mode
         self.transformer_subscriber = None
 
         self.last_message_time = time.time()
@@ -437,8 +438,8 @@ class Transformer:
         :returns ret: 0 if run successfully.
         """
         try:
-            self.logger.info("Starting transformer run loop, idle_timeout=%s, run_id=%s, workdir=%s, namespace=%s",
-                             self.idle_timeout, self._run_id, self._workdir, self._namespace)
+            self.logger.info("Starting transformer run loop, idle_timeout=%s, run_id=%s, workdir=%s, namespace=%s, stream_mode=%s",
+                             self.idle_timeout, self._run_id, self._workdir, self._namespace, self.stream_mode)
             if not self.init_brokers():
                 self.logger.error("Brokers are not initialized, cannot run transformer")
                 return False
