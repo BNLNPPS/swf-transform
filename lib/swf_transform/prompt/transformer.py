@@ -24,11 +24,15 @@ try:
     from .brokers.activemq import Subscriber, Publisher
     from .payload_process import process_payload, cleanup_processors
     from .conf import get_broker_config
+    from . import ejfat
+    from .ejfat import EJFATSubscriber
 except Exception:
     # fallback to installed package layout
     from swf_transform.prompt.brokers.activemq import Subscriber, Publisher
     from swf_transform.prompt.payload_process import process_payload, cleanup_processors
     from swf_transform.prompt.conf import get_broker_config
+    from swf_transform.prompt import ejfat
+    from swf_transform.prompt.ejfat import EJFATSubscriber
 
 
 setup_logging(__name__)
@@ -39,6 +43,7 @@ class Transformer:
         self._transformer_broker = None
         self._transformer_broadcast_broker = None
         self._result_broker = None
+        self._ejfat_broker = None
         self._broker_initialized = False
 
         self._run_id = run_id
@@ -65,6 +70,11 @@ class Transformer:
                     "transformer_broadcast_broker", None
                 )
                 result_broker = broker_info.get("result_broker", None)
+                ejfat_broker = broker_info.get("ejfat", None)
+
+                if self.stream_mode == "ejfat" and ejfat_broker:
+                    self._ejfat_broker = ejfat_broker
+                    self.logger.info("Initialized ejfat broker")
 
                 if (
                     transformer_broker
@@ -88,7 +98,7 @@ class Transformer:
         return os.environ.get("IDDS_HOST", None)
 
     @staticmethod
-    def _mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token")):
+    def _mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token", "admin_uri")):
         """Return a deep copy of *obj* with sensitive string values replaced by '***'."""
         if isinstance(obj, dict):
             return {
@@ -195,7 +205,8 @@ class Transformer:
             {
                 "transformer_broker": {...},
                 "transformer_broadcast_broker": {...},
-                "result_broker": {...}
+                "result_broker": {...},
+                "ejfat": {'admin_uri': 'ejfats://<token>@ejfat-lb.es.net:18040/'}
             }
         """
         # First priority: check if PROMPT_TRANSFORM_CONF env var is set
@@ -432,6 +443,14 @@ class Transformer:
             # propagate to inform the message listener
             raise
 
+    def ejfat_transformer_handler(self, header, msg, handler_kwargs={}):
+        """Receive slice message over the EJFAT data plane and process the payload.
+
+        Delegates to `ejfat._ejfat_transformer_handler` so EJFAT-specific
+        message handling stays alongside the EJFAT receiver implementation.
+        """
+        ejfat._ejfat_transformer_handler(self, header, msg, handler_kwargs)
+
     def run(self):
         """
         Run the transformer to process messages from transformer broker.
@@ -462,16 +481,30 @@ class Transformer:
             if self._run_id is not None:
                 selector = f"run_id = '{self._run_id}'"
 
-            transformer_subscriber = Subscriber(
-                broker=self._transformer_broker,
-                handler=self.transformer_handler,
-                selector=selector,
-                namespace=self._namespace,
-                handler_kwargs={"result_publisher": result_publisher},
-                name="SliceSubscriber",
-                with_listener_thread=True,
-            )
-            self.transformer_subscriber = transformer_subscriber
+            if self.stream_mode == "ejfat":
+                self.logger.info("EJFAT mode enabled, using ejfat broker for slice events")
+                transformer_subscriber = EJFATSubscriber(
+                    broker=self._ejfat_broker,
+                    handler=self.ejfat_transformer_handler,
+                    selector=selector,
+                    namespace=self._namespace,
+                    handler_kwargs={"result_publisher": result_publisher},
+                    name="SliceSubscriber",
+                    with_listener_thread=True,
+                )
+                self.transformer_subscriber = transformer_subscriber
+            else:
+                self.logger.info("Using standard transformer broker for slice events")
+                transformer_subscriber = Subscriber(
+                    broker=self._transformer_broker,
+                    handler=self.transformer_handler,
+                    selector=selector,
+                    namespace=self._namespace,
+                    handler_kwargs={"result_publisher": result_publisher},
+                    name="SliceSubscriber",
+                    with_listener_thread=True,
+                )
+                self.transformer_subscriber = transformer_subscriber
 
             _last_idle_log_at = None  # None means the first log hasn't been emitted yet
 
