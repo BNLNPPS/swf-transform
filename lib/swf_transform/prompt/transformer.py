@@ -222,16 +222,19 @@ class Transformer:
                         "transformer_broadcast_broker"
                     )
                     result_broker = broker_info.get("result_broker")
+                    ejfat_broker = broker_info.get("ejfat")
 
                     if (
                         transformer_broker
                         and transformer_broadcast_broker
                         and result_broker
+                        and ejfat_broker
                     ):
                         ret = {
                             "transformer_broker": transformer_broker,
                             "transformer_broadcast_broker": transformer_broadcast_broker,
                             "result_broker": result_broker,
+                            "ejfat": ejfat_broker,
                         }
                         self.logger.info(
                             "Successfully loaded broker config from PROMPT_TRANSFORM_CONF"
