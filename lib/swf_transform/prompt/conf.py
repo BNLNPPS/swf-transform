@@ -84,6 +84,7 @@ def load_config(config_path=None):
             "transformer_broker",
             "result_broker",
             "transformer_broadcast_broker",
+            "ejfat",
         ]:
             if key in section:
                 try:
