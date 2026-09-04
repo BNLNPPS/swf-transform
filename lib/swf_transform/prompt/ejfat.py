@@ -55,7 +55,7 @@ class EJFATSubscriber:
         namespace=None,
         name="EJFATSubscriber",
         idle_seconds=5,
-        port=0,
+        port=10000,
         threads=1,
         data_ip=None,
         node_name=None,
