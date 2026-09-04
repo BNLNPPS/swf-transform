@@ -98,7 +98,7 @@ class Transformer:
         return os.environ.get("IDDS_HOST", None)
 
     @staticmethod
-    def _mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token", "admin_uri")):
+    def _mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token", "admin_uri", "instance_uri")):
         """Return a deep copy of *obj* with sensitive string values replaced by '***'."""
         if isinstance(obj, dict):
             return {
@@ -206,7 +206,7 @@ class Transformer:
                 "transformer_broker": {...},
                 "transformer_broadcast_broker": {...},
                 "result_broker": {...},
-                "ejfat": {'admin_uri': 'ejfats://<token>@ejfat-lb.es.net:18040/'}
+                "ejfat": {'admin_uri': 'ejfats://<token>@ejfat-lb.es.net:18040/....', 'instance_uri': 'ejfats://<token>@ejfat-lb.es.net:18040/....'}
             }
         """
         # First priority: check if PROMPT_TRANSFORM_CONF env var is set
@@ -271,16 +271,19 @@ class Transformer:
                     "transformer_broadcast_broker"
                 )
                 result_broker = broker_info.get("result_broker")
+                ejfat_broker = broker_info.get("ejfat")
 
                 if (
                     transformer_broker
                     and transformer_broadcast_broker
                     and result_broker
+                    and ejfat_broker
                 ):
                     ret = {
                         "transformer_broker": transformer_broker,
                         "transformer_broadcast_broker": transformer_broadcast_broker,
                         "result_broker": result_broker,
+                        "ejfat": ejfat_broker,
                     }
                     self.logger.info(
                         "Successfully loaded broker config from local config file"
@@ -494,6 +497,7 @@ class Transformer:
                     handler_kwargs={"result_publisher": result_publisher},
                     name="SliceSubscriber",
                     with_listener_thread=True,
+                    run_id=self._run_id,
                 )
                 self.transformer_subscriber = transformer_subscriber
             else:

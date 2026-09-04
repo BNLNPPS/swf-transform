@@ -59,6 +59,7 @@ class EJFATSubscriber:
         threads=1,
         data_ip=None,
         node_name=None,
+        run_id=None,
         **kwargs,
     ):
         self.broker = broker or {}
@@ -68,6 +69,8 @@ class EJFATSubscriber:
         self.namespace = namespace
         self.name = name
         self.logger = logging.getLogger(name)
+
+        self.run_id = run_id
 
         self.idle_seconds = int(idle_seconds)
         self.last_message_at = time.time()
@@ -85,10 +88,19 @@ class EJFATSubscriber:
         self._thread = None
 
     def _uri_str(self):
-        # Prefer instance_uri (per-instance endpoint) falling back to admin_uri
-        if isinstance(self.broker, dict):
-            return self.broker.get("instance_uri") or self.broker.get("admin_uri")
-        return None
+        # broker shape: {'<run_id>': {'instance_uri': ...}, ..., 'instance_uri': ..., 'admin_uri': ...}
+        # Prefer the run-specific instance_uri (from the current selector's run_id),
+        # falling back to the broker-level instance_uri, then admin_uri.
+        if not isinstance(self.broker, dict):
+            return None
+
+        run_id = self.run_id
+        if run_id is not None:
+            run_entry = self.broker.get(run_id)
+            if isinstance(run_entry, dict) and run_entry.get("instance_uri"):
+                return run_entry["instance_uri"]
+
+        return self.broker.get("instance_uri") or self.broker.get("admin_uri")
 
     def _connect(self):
         if not _HAS_E2SAR:
