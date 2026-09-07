@@ -16,6 +16,7 @@ import re
 import socket
 import threading
 import time
+import uuid
 
 try:
     # prefer local package layout
@@ -71,6 +72,9 @@ class EJFATSubscriber:
         self.logger = logging.getLogger(name)
 
         self.run_id = run_id
+
+        hostname = socket.getfqdn().split(".")[0]
+        self.internal_id = f"{self.namespace}.{self.name}.{hostname}.{str(uuid.uuid4())[:8]}"
 
         self.idle_seconds = int(idle_seconds)
         self.last_message_at = time.time()
@@ -252,6 +256,11 @@ class EJFATSubscriber:
 
     def fail(self):
         self.has_connection_failures = True
+
+    def is_ready(self):
+        """Return True once the reassembler is connected and the receive
+        thread is running (i.e. ready to receive slice events)."""
+        return self._reas is not None and self._thread is not None and self._thread.is_alive()
 
     def monitor(self):
         if self.graceful_stop.is_set():

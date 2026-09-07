@@ -16,6 +16,7 @@ import os
 import socket
 import time
 import traceback
+import uuid
 
 from .utils import setup_logging
 
@@ -53,6 +54,15 @@ class Transformer:
         self.idle_timeout = idle_timeout
         self.stream_mode = stream_mode
         self.transformer_subscriber = None
+
+        # Stable identifier for this transformer instance/process, used to identify
+        # it in 'transformer_ready' broadcasts. Prefer ids assigned by the
+        # orchestration system (Harvester/PanDA), falling back to hostname+uuid.
+        self.transformer_id = (
+            "transformer-harvester-" + os.environ.get("HARVESTER_WORKER_ID")
+            or "transformer-panda-" + os.environ.get("PANDAID")
+            or f"transformer-{socket.getfqdn().split('.')[0]}-{str(uuid.uuid4())[:8]}"
+        )
 
         self.last_message_time = time.time()
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -477,6 +487,11 @@ class Transformer:
                 namespace=self._namespace,
                 name="TFBroadcastSubscriber",
             )
+            transformer_broadcast_publisher = Publisher(
+                broker=self._transformer_broadcast_broker,
+                namespace=self._namespace,
+                name="TFBroadcastPublisher",
+            )
             result_publisher = Publisher(
                 broker=self._result_broker,
                 namespace=self._namespace,
@@ -512,6 +527,16 @@ class Transformer:
                     with_listener_thread=True,
                 )
                 self.transformer_subscriber = transformer_subscriber
+
+            ready_broadcast_interval = 180
+            if self._transformer_broadcast_broker:
+                try:
+                    ready_broadcast_interval = int(
+                        self._transformer_broadcast_broker.get("ready_broadcast_interval", 180)
+                    )
+                except Exception:
+                    ready_broadcast_interval = 180
+            _last_ready_broadcast_at = None
 
             _last_idle_log_at = None  # None means the first log hasn't been emitted yet
 
@@ -555,6 +580,32 @@ class Transformer:
                 transformer_broadcast_subscriber.monitor()
                 transformer_subscriber.monitor()
                 result_publisher.monitor()
+
+                if transformer_subscriber.is_ready():
+                    if (
+                        _last_ready_broadcast_at is None
+                        or now - _last_ready_broadcast_at >= ready_broadcast_interval
+                    ):
+                        try:
+                            transformer_broadcast_publisher.publish(
+                                {
+                                    "msg_type": "transformer_ready",
+                                    "run_id": self._run_id or "unknown",
+                                    "created_at": datetime.datetime.utcnow().isoformat(),
+                                    "content": {
+                                        "id": self.transformer_id,
+                                        "run_id": self._run_id or "unknown",
+                                        "timestamp": now,
+                                        "lifetime": ready_broadcast_interval * 2,
+                                    },
+                                }
+                            )
+                            self.logger.debug(
+                                f"Published transformer_ready broadcast: id={self.transformer_id}"
+                            )
+                        except Exception:
+                            self.logger.exception("Failed to publish transformer_ready broadcast")
+                        _last_ready_broadcast_at = now
 
                 time.sleep(1)
 

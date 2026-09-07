@@ -875,6 +875,21 @@ class Subscriber(BaseActiveMQ):
             if not conn.is_connected():
                 self.subscribe_conn(conn)
 
+    def is_ready(self):
+        """Return True once the connection is established and the listener is
+        set up to receive incoming messages (i.e. subscribe_conn() has
+        completed for at least one connection).
+        """
+        if self.listener is None:
+            return False
+        for conn in list(self.conns):
+            try:
+                if conn.is_connected():
+                    return True
+            except Exception:
+                continue
+        return False
+
     def update_selector(self, selector):
         """Narrow the broker-side selector (e.g. once a run_id becomes known from the
         first received message) and re-subscribe already-connected connections so it
