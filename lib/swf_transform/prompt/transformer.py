@@ -40,7 +40,7 @@ setup_logging(__name__)
 
 
 class Transformer:
-    def __init__(self, run_id=None, workdir=None, namespace=None, idle_timeout=1800, stream_mode=None):
+    def __init__(self, run_id=None, workdir=None, namespace=None, idle_timeout=1800, streaming_mode=None):
         self._transformer_broker = None
         self._transformer_broadcast_broker = None
         self._result_broker = None
@@ -52,7 +52,7 @@ class Transformer:
         self._namespace = namespace
         self._to_stop = False
         self.idle_timeout = idle_timeout
-        self.stream_mode = stream_mode
+        self.streaming_mode = streaming_mode
         self.transformer_subscriber = None
 
         # Stable identifier for this transformer instance/process, used to identify
@@ -82,7 +82,7 @@ class Transformer:
                 result_broker = broker_info.get("result_broker", None)
                 ejfat_broker = broker_info.get("ejfat", None)
 
-                if self.stream_mode == "ejfat" and ejfat_broker:
+                if self.streaming_mode == "ejfat" and ejfat_broker:
                     self._ejfat_broker = ejfat_broker
                     self.logger.info("Initialized ejfat broker")
 
@@ -473,8 +473,8 @@ class Transformer:
         :returns ret: 0 if run successfully.
         """
         try:
-            self.logger.info("Starting transformer run loop, idle_timeout=%s, run_id=%s, workdir=%s, namespace=%s, stream_mode=%s",
-                             self.idle_timeout, self._run_id, self._workdir, self._namespace, self.stream_mode)
+            self.logger.info("Starting transformer run loop, idle_timeout=%s, run_id=%s, workdir=%s, namespace=%s, streaming_mode=%s",
+                             self.idle_timeout, self._run_id, self._workdir, self._namespace, self.streaming_mode)
             if not self.init_brokers():
                 self.logger.error("Brokers are not initialized, cannot run transformer")
                 return False
@@ -502,7 +502,7 @@ class Transformer:
             if self._run_id is not None:
                 selector = f"run_id = '{self._run_id}'"
 
-            if self.stream_mode == "ejfat":
+            if self.streaming_mode == "ejfat":
                 self.logger.info("EJFAT mode enabled, using ejfat broker for slice events")
                 transformer_subscriber = EJFATSubscriber(
                     broker=self._ejfat_broker,

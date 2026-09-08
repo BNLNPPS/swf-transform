@@ -83,26 +83,30 @@ new_command_base="python ${current_dir}/bin/run_prompt --workdir ${current_dir}"
 
 new_command="${new_command_base} $@"
 
-# Detect "--stream_mode ejfat" among the passed-through arguments. EJFAT
+# Detect "--streaming_mode ejfat" among the passed-through arguments. EJFAT
 # streaming needs the e2sar libraries, which are only available inside the
 # e2sar container image, so run new_command there instead of on the bare host.
-stream_mode=""
+streaming_mode=""
 args=("$@")
 for ((i=0; i<$#; i++)); do
-    if [[ "${args[$i]}" == "--stream_mode" ]] && [[ $((i+1)) -lt $# ]]; then
-        stream_mode="${args[$((i+1))]}"
+    if [[ "${args[$i]}" == "--streaming_mode" ]] && [[ $((i+1)) -lt $# ]]; then
+        streaming_mode="${args[$((i+1))]}"
     fi
 done
 
-if [[ "$stream_mode" == "ejfat" ]]; then
+if [[ "$streaming_mode" == "ejfat" ]]; then
     EJFAT_IMAGE="/cvmfs/unpacked.cern.ch/registry.hub.docker.com/ibaldin/e2sar:0.3.2"
-    echo "stream_mode=ejfat detected, running new_command inside container: ${EJFAT_IMAGE}"
-    # Pass PYTHONPATH from host into the container so e2sar libraries installed in
-    # the container's runtime path are visible to the Python process.
+    echo "streaming_mode=ejfat detected, running new_command inside container: ${EJFAT_IMAGE}"
+    # Prepend the e2sar libraries to the host's PYTHONPATH (rather than replacing
+    # it) so the container's Python can still find swf_transform under
+    # ${current_dir}/lib_py in addition to the e2sar packages.
+    # Bind-mount current_dir so ${current_dir}/bin, ${current_dir}/lib_py,
+    # ${current_dir}/x509_proxy and ${current_dir}/conf are visible inside the
+    # container at the same path.
     # Forward "$@" into the container via /bin/bash -c ... -- $@ so that the
     # inner shell receives the original positional parameters (including
-    # --stream_mode). Use the base command to avoid double-expansion issues.
-    new_command="singularity exec --env PYTHONPATH=/e2sar-install/lib/python3/dist-packages -B /cvmfs:/cvmfs ${EJFAT_IMAGE} /bin/bash -c \"${new_command_base} \\\"\$@\\\"\" -- $@"
+    # --streaming_mode). Use the base command to avoid double-expansion issues.
+    new_command="singularity exec --env PYTHONPATH=/e2sar-install/lib/python3/dist-packages:${PYTHONPATH} -B /cvmfs:/cvmfs -B ${current_dir}:${current_dir} ${EJFAT_IMAGE} /bin/bash -c \"${new_command_base} \\\"\$@\\\"\" -- $@"
 fi
 
 echo "new command: "
