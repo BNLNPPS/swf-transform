@@ -105,10 +105,15 @@ if [[ "$streaming_mode" == "ejfat" ]]; then
     # Bind-mount current_dir so ${current_dir}/bin, ${current_dir}/lib_py,
     # ${current_dir}/x509_proxy and ${current_dir}/conf are visible inside the
     # container at the same path.
-    # Forward "$@" into the container via /bin/bash -c ... -- $@ so that the
-    # inner shell receives the original positional parameters (including
-    # --streaming_mode). Use the base command to avoid double-expansion issues.
-    new_command="singularity exec --env PYTHONPATH=/e2sar-install/lib/python3/dist-packages:${PYTHONPATH} -B /cvmfs:/cvmfs -B ${current_dir}:${current_dir} ${EJFAT_IMAGE} /bin/bash -c \"${new_command_base} \\\"\$@\\\"\" -- $@"
+    # Run run_prompt directly as the container's command (no "/bin/bash -c"
+    # wrapper): "new_command" is passed through "eval" below, which reparses
+    # its argument as shell syntax, so any quote/backslash escaping meant to
+    # protect a nested "$@" from that reparse gets unescaped and expanded
+    # prematurely, breaking the quoting (the earlier bash -c "... \"$@\""
+    # form failed with "unexpected EOF while looking for matching `"'").
+    # Expanding $@ once here, exactly like the non-container case above,
+    # avoids that double-expansion entirely.
+    new_command="singularity exec --env PYTHONPATH=/e2sar-install/lib/python3/dist-packages:${PYTHONPATH} -B /cvmfs:/cvmfs -B ${current_dir}:${current_dir} ${EJFAT_IMAGE} ${new_command_base} $@"
 fi
 
 echo "new command: "
