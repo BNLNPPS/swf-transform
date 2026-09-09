@@ -94,6 +94,8 @@ for ((i=0; i<$#; i++)); do
     fi
 done
 
+echo "streaming_mode: $streaming_mode"
+
 if [[ "$streaming_mode" == "ejfat" ]]; then
     EJFAT_IMAGE="/cvmfs/unpacked.cern.ch/registry.hub.docker.com/ibaldin/e2sar:0.3.2"
     echo "streaming_mode=ejfat detected, running new_command inside container: ${EJFAT_IMAGE}"
