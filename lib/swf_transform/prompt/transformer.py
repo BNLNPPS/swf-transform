@@ -58,11 +58,14 @@ class Transformer:
         # Stable identifier for this transformer instance/process, used to identify
         # it in 'transformer_ready' broadcasts. Prefer ids assigned by the
         # orchestration system (Harvester/PanDA), falling back to hostname+uuid.
-        self.transformer_id = (
-            "transformer-harvester-" + os.environ.get("HARVESTER_WORKER_ID")
-            or "transformer-panda-" + os.environ.get("PANDAID")
-            or f"transformer-{socket.getfqdn().split('.')[0]}-{str(uuid.uuid4())[:8]}"
-        )
+        harvester_worker_id = os.environ.get("HARVESTER_WORKER_ID")
+        pandaid = os.environ.get("PANDAID")
+        if harvester_worker_id:
+            self.transformer_id = f"transformer-harvester-{harvester_worker_id}"
+        elif pandaid:
+            self.transformer_id = f"transformer-panda-{pandaid}"
+        else:
+            self.transformer_id = f"transformer-{socket.getfqdn().split('.')[0]}-{str(uuid.uuid4())[:8]}"
 
         self.last_message_time = time.time()
         self.logger = logging.getLogger(self.__class__.__name__)
