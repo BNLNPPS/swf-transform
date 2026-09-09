@@ -513,7 +513,7 @@ class Transformer:
                     selector=selector,
                     namespace=self._namespace,
                     handler_kwargs={"result_publisher": result_publisher},
-                    name="SliceSubscriber",
+                    name="EJFATSliceSubscriber",
                     with_listener_thread=True,
                     run_id=self._run_id,
                 )

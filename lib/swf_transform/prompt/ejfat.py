@@ -61,6 +61,7 @@ class EJFATSubscriber:
         data_ip=None,
         node_name=None,
         run_id=None,
+        log_period_seconds=60,
         **kwargs,
     ):
         self.broker = broker or {}
@@ -90,6 +91,10 @@ class EJFATSubscriber:
         self._rflags = None
         self.graceful_stop = threading.Event()
         self._thread = None
+
+        self.log_period_seconds = float(log_period_seconds)
+        self._events_received = 0
+        self._last_log_at = time.time()
 
     def _uri_str(self):
         # broker shape: {'<run_id>': {'instance_uri': ...}, ..., 'instance_uri': ..., 'admin_uri': ...}
@@ -185,6 +190,20 @@ class EJFATSubscriber:
         finally:
             self._reas = None
 
+    def _log_periodic_status(self):
+        """Emit a heartbeat log every `log_period_seconds`, so it's visible in the
+        pilot/payload logs that the subscriber is still alive while it waits for
+        events (recvEventBytes returning empty produces no other log output).
+        """
+        now = time.time()
+        if now - self._last_log_at < self.log_period_seconds:
+            return
+        self._last_log_at = now
+        self.logger.info(
+            f"[ejfat] [{self.name}]: heartbeat: events_received={self._events_received}, "
+            f"idle_elapsed={self.idle_elapsed():.1f}s, waiting_since={self.waiting_since()}"
+        )
+
     def _run_loop(self):
         try:
             self._connect()
@@ -203,7 +222,10 @@ class EJFATSubscriber:
                 self.logger.exception(f"[ejfat] [{self.name}]: error receiving event")
                 self.has_connection_failures = True
                 time.sleep(1)
+                self._log_periodic_status()
                 continue
+
+            self._log_periodic_status()
 
             if not recv:
                 continue
@@ -218,6 +240,7 @@ class EJFATSubscriber:
             if recv_len == -1:
                 continue
 
+            self._events_received += 1
             self.is_processing_message = True
             try:
                 self._dispatch(recv_bytes, event_num, data_id)
