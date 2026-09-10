@@ -231,13 +231,26 @@ class ZeroMQProcessor:
     # ---------------------------------------------------------------------- #
 
     @staticmethod
-    def _failed_payload(payload, error):
+    def _redacted_origin_message(payload):
+        """Return a copy of *payload* with `payload['payload']` -- the
+        base64-pickled EJFAT event data, which can be many KB -- replaced by a
+        short placeholder, so `origin_message` doesn't embed the whole event
+        into the result dict (and any message published downstream).
+        """
+        origin = payload.copy()
+        raw_event_payload = origin.get("payload")
+        if isinstance(raw_event_payload, str):
+            origin["payload"] = f"<{len(raw_event_payload)} chars, redacted>"
+        return origin
+
+    @classmethod
+    def _failed_payload(cls, payload, error):
         """Build a failure result with the same envelope shape as the success
         `processed_payload` in `process()`, so callers get a consistent dict
         regardless of status instead of `None`.
         """
         return {
-            "origin_message": payload.copy(),
+            "origin_message": cls._redacted_origin_message(payload),
             "state": "failed",
             "processed": False,
             "payload_result": None,
@@ -377,7 +390,7 @@ class ZeroMQProcessor:
         # Return enriched payload
         # ------------------------------------------------------------------ #
         processed_payload = {
-            "origin_message": payload.copy(),
+            "origin_message": self._redacted_origin_message(payload),
             "state": "processed",
             "processed": True,
             "payload_result": {

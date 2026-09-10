@@ -145,7 +145,7 @@ def process_payload_fake(payload):
             logger.warning(f"Could not create output file {output_file}: {exc}")
 
     processed_payload = {
-        "origin_message": payload.copy(),
+        "origin_message": _redacted_origin_message(payload),
         "state": "processed",
         "processed": True,
         "payload_result": {
@@ -160,13 +160,26 @@ def process_payload_fake(payload):
     return True, processed_payload, None
 
 
+def _redacted_origin_message(payload):
+    """Return a copy of *payload* with `payload['payload']` -- the
+    base64-pickled EJFAT event data, which can be many KB -- replaced by a
+    short placeholder, so `origin_message` doesn't embed the whole event
+    into the result dict (and any message published downstream).
+    """
+    origin = payload.copy()
+    raw_event_payload = origin.get("payload")
+    if isinstance(raw_event_payload, str):
+        origin["payload"] = f"<{len(raw_event_payload)} chars, redacted>"
+    return origin
+
+
 def _failed_payload(payload, error):
     """Build a failure result with the same envelope shape as the success
     `processed_payload` in `process_payload_eicrecon`, so callers get a
     consistent dict regardless of status instead of `None`.
     """
     return {
-        "origin_message": payload.copy(),
+        "origin_message": _redacted_origin_message(payload),
         "state": "failed",
         "processed": False,
         "payload_result": None,
@@ -305,7 +318,7 @@ def process_payload_eicrecon(payload):
         # Success — enrich result dict
         # ------------------------------------------------------------ #
         processed_payload = {
-            "origin_message": payload.copy(),
+            "origin_message": _redacted_origin_message(payload),
             "state": "processed",
             "processed": True,
             "payload_result": {
