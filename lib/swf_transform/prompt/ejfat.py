@@ -168,6 +168,21 @@ class EJFATSubscriber:
         match = re.search(r"run_id\s*=\s*'([^']*)'", self.selector)
         return match.group(1) if match else None
 
+    @staticmethod
+    def _loggable_msg(msg):
+        """Return a copy of `msg` with 'content.payload' (the base64-pickled
+        event data, can be many KB) replaced by a short placeholder, so debug
+        logs stay readable instead of dumping the whole payload.
+        """
+        content = msg.get("content")
+        payload = content.get("payload") if isinstance(content, dict) else None
+        if not isinstance(payload, str):
+            return msg
+        masked = dict(msg)
+        masked["content"] = dict(content)
+        masked["content"]["payload"] = f"<{len(payload)} chars, truncated: {payload[:16]}...>"
+        return masked
+
     def _dispatch(self, recv_bytes, event_num, data_id):
         try:
             msg = json.loads(recv_bytes)
@@ -175,7 +190,9 @@ class EJFATSubscriber:
             self.logger.error(f"[ejfat] [{self.name}]: failed to decode event #{event_num} as JSON; skipping")
             return
 
-        self.logger.debug(f"[ejfat] [{self.name}]: received event #{event_num} data_id={data_id}: msg={msg}")
+        self.logger.debug(
+            f"[ejfat] [{self.name}]: received event #{event_num} data_id={data_id}: msg={self._loggable_msg(msg)}"
+        )
 
         if self.namespace is not None and msg.get("namespace") not in (None, self.namespace):
             self.logger.debug(f"[ejfat] [{self.name}]: skipping event #{event_num}: namespace mismatch")
