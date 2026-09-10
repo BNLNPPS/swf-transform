@@ -175,6 +175,8 @@ class EJFATSubscriber:
             self.logger.error(f"[ejfat] [{self.name}]: failed to decode event #{event_num} as JSON; skipping")
             return
 
+        self.logger.debug(f"[ejfat] [{self.name}]: received event #{event_num} data_id={data_id}: msg={msg}")
+
         if self.namespace is not None and msg.get("namespace") not in (None, self.namespace):
             self.logger.debug(f"[ejfat] [{self.name}]: skipping event #{event_num}: namespace mismatch")
             return
