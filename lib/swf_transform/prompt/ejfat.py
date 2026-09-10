@@ -62,6 +62,7 @@ class EJFATSubscriber:
         node_name=None,
         run_id=None,
         log_period_seconds=60,
+        recv_buf_size=196608,
         **kwargs,
     ):
         self.broker = broker or {}
@@ -86,6 +87,13 @@ class EJFATSubscriber:
         self.threads = threads
         self.data_ip = data_ip
         self.node_name = node_name or namespace or name
+        # e2sar_py's ReassemblerFlags default (3 MiB) exceeds the kernel's
+        # rmem_max on nodes that haven't raised it (commonly 208 KiB), which
+        # makes socket setup fail with "System socket buffer set too low for
+        # this receive socket buffer size". Default to the same value the
+        # e2sar reference client uses (192 KiB), which fits under the
+        # unmodified kernel default.
+        self.recv_buf_size = int(recv_buf_size)
 
         self._reas = None
         self._rflags = None
@@ -126,6 +134,8 @@ class EJFATSubscriber:
         rflags = RFlags() if RFlags else None
         if rflags is not None and hasattr(rflags, "useCP"):
             setattr(rflags, "useCP", True)
+        if rflags is not None and hasattr(rflags, "rcvSocketBufSize"):
+            setattr(rflags, "rcvSocketBufSize", self.recv_buf_size)
 
         ReassemblerCls = getattr(e2sar_py.DataPlane, "Reassembler", None)
         if ReassemblerCls is None:
@@ -138,10 +148,11 @@ class EJFATSubscriber:
             reas = ReassemblerCls(uri, self.port, self.threads, rflags)
 
         if rflags is not None and getattr(rflags, "useCP", False):
-            try:
-                _unwrap(getattr(reas, "registerWorker", lambda *a, **k: None)(self.node_name), "registering worker")
-            except Exception:
-                self.logger.exception(f"[ejfat] [{self.name}]: failed to register EJFAT worker")
+            # Do not swallow a failed registration: if the worker isn't registered
+            # with the control plane, the load balancer never learns its address
+            # and will silently never route any data-plane traffic to it, so let
+            # this propagate and fail _connect() like any other setup error.
+            _unwrap(getattr(reas, "registerWorker", lambda *a, **k: None)(self.node_name), "registering worker")
 
         _unwrap(getattr(reas, "OpenAndStart", lambda: None)(), "starting reassembler")
         self._rflags = rflags
@@ -442,11 +453,21 @@ def _ejfat_transformer_handler(transformer, header, msg, handler_kwargs=None):
 def _unwrap(val, desc: str = "operation"):
     """Helper that normalizes return values from e2sar_py calls.
 
-    If `val` is a tuple (result, err) we return it. If it's a single value
-    we return (val, None). On None we raise RuntimeError.
+    Most e2sar_py calls return a Result-like object exposing has_error()/
+    error()/value() (see e2sar_py.EjfatURI.get_from_env, LBManager.reserve_lb,
+    Reassembler.registerWorker/OpenAndStart, ...). Raise RuntimeError if such
+    a Result reports an error, instead of silently treating it as success.
+    Also accepts a plain (result, err) tuple, a bare value, or None (error).
     """
     if val is None:
         raise RuntimeError(f"Failed while {desc}: returned None")
+    if hasattr(val, "has_error"):
+        if val.has_error():
+            error = val.error() if hasattr(val, "error") else None
+            message = getattr(error, "message", error)
+            message = message() if callable(message) else message
+            raise RuntimeError(f"Failed while {desc}: {message}")
+        return val.value() if hasattr(val, "value") else val
     if isinstance(val, tuple):
         return val
     return (val, None)
