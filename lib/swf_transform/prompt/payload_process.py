@@ -77,11 +77,12 @@ def process_payload_fake(payload):
 
     Returns
     -------
-    status : bool   Always ``True``.
+    status : bool   True on success, False if creating the output directory failed.
     result : dict   ``{"origin_message": <payload copy>, "state", "processed",
                     "payload_result": {"output_file", "output_filename"},
-                    "metrics": {...}}``.
-    error  : str    Always ``None``.
+                    "metrics": {...}, "error"}``. On failure, "payload_result"
+                    and "metrics" are None and "error" carries the message.
+    error  : str    Human-readable error message, or None on success.
     """
     logger = logging.getLogger("PayloadProcessor")
     logger.info(f"Processing fake/mock payload: {payload}")
@@ -123,7 +124,12 @@ def process_payload_fake(payload):
     if dest_path:
         dest_path = os.path.join(dest_path, str(run_id))
         output_file = os.path.join(dest_path, output_filename)
-        os.makedirs(dest_path, exist_ok=True)
+        try:
+            os.makedirs(dest_path, exist_ok=True)
+        except OSError as exc:
+            error = f"Failed to create output directory {dest_path}: {exc}"
+            logger.error(error)
+            return False, _failed_payload(payload, error), error
     else:
         logger.info(
             f"No dest_path in payload; skipping output file creation for {output_filename}"
@@ -155,6 +161,7 @@ def process_payload_fake(payload):
         "metrics": {
             "actual_processing_time": elapsed,
         },
+        "error": None,
     }
 
     return True, processed_payload, None
