@@ -109,7 +109,7 @@ class EJFATSubscriber:
             if isinstance(run_entry, dict) and run_entry.get("instance_uri"):
                 return run_entry["instance_uri"]
 
-        return self.broker.get("instance_uri") or self.broker.get("admin_uri")
+        return self.broker.get("instance_uri")
 
     def _connect(self):
         if not _HAS_E2SAR:
@@ -118,6 +118,8 @@ class EJFATSubscriber:
         uri_str = self._uri_str()
         if not uri_str:
             raise ValueError("No 'instance_uri' or 'admin_uri' found in ejfat broker configuration")
+        else:
+            self.logger.info(f"[ejfat] [{self.name}]: connecting to EJFAT URI: {uri_str}")
         uri = _load_uri({"uri": uri_str})
 
         RFlags = getattr(e2sar_py.DataPlane.Reassembler, "ReassemblerFlags", None)
