@@ -79,7 +79,7 @@ ls ${current_dir}/lib_py
 # Build a base command without expanding the positional parameters yet.
 # We'll append the original "$@" later so streaming_mode and other args
 # are always forwarded intact.
-new_command_base="python ${current_dir}/bin/run_prompt --workdir ${current_dir}"
+new_command_base="python3 ${current_dir}/bin/run_prompt --workdir ${current_dir}"
 
 new_command="${new_command_base} $@"
 
