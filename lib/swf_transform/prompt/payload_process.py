@@ -160,6 +160,21 @@ def process_payload_fake(payload):
     return True, processed_payload, None
 
 
+def _failed_payload(payload, error):
+    """Build a failure result with the same envelope shape as the success
+    `processed_payload` in `process_payload_eicrecon`, so callers get a
+    consistent dict regardless of status instead of `None`.
+    """
+    return {
+        "origin_message": payload.copy(),
+        "state": "failed",
+        "processed": False,
+        "payload_result": None,
+        "metrics": None,
+        "error": error,
+    }
+
+
 def process_payload_eicrecon(payload):
     """
     Process a slice payload by running eicrecon on the input file inside the
@@ -184,7 +199,8 @@ def process_payload_eicrecon(payload):
     status : bool   True on success, False on failure.
     result : dict   ``{"origin_message": <payload copy>, "state", "processed",
                     "payload_result": {"output_file", "output_filename"},
-                    "metrics": {...}}``, or None on failure.
+                    "metrics": {...}, "error"}``. On failure, "payload_result"
+                    and "metrics" are None and "error" carries the message.
     error  : str    Human-readable error message, or None on success.
     """
     logger = logging.getLogger("PayloadProcessor")
@@ -195,7 +211,7 @@ def process_payload_eicrecon(payload):
     # ------------------------------------------------------------------ #
     fields, error = extract_payload_fields(payload, logger)
     if error:
-        return False, None, error
+        return False, _failed_payload(payload, error), error
 
     filename = fields["filename"]
     run_id = fields["run_id"]
@@ -214,7 +230,8 @@ def process_payload_eicrecon(payload):
         with open(_find_script_template()) as fh:
             script_content = fh.read()
     except OSError as exc:
-        return False, None, f"Cannot read eicrecon script template: {exc}"
+        error = f"Cannot read eicrecon script template: {exc}"
+        return False, _failed_payload(payload, error), error
 
     script_content = script_content.replace("{EPIC_VERSION}", version)
     script_content = script_content.replace("{INPUT_FILE}", filename)
@@ -261,7 +278,7 @@ def process_payload_eicrecon(payload):
                 f"stderr (last 500 chars): {proc.stderr[-500:]}"
             )
             logger.error(error)
-            return False, None, error
+            return False, _failed_payload(payload, error), error
 
         # ------------------------------------------------------------ #
         # Copy output file to dest_path/run_id/
@@ -278,7 +295,7 @@ def process_payload_eicrecon(payload):
             except OSError as exc:
                 error = f"Failed to copy output file to {dest_file}: {exc}"
                 logger.error(error)
-                return False, None, error
+                return False, _failed_payload(payload, error), error
         else:
             logger.info(
                 f"No dest_path in payload; output file left at: {output_file}"
@@ -300,6 +317,7 @@ def process_payload_eicrecon(payload):
                 "nevents_processed": nevents,
                 "epic_version": version,
             },
+            "error": None,
         }
 
         return True, processed_payload, None
@@ -307,12 +325,12 @@ def process_payload_eicrecon(payload):
     except subprocess.TimeoutExpired:
         error = f"eicrecon processing timed out after {eicrecon_timeout}s"
         logger.error(error)
-        return False, None, error
+        return False, _failed_payload(payload, error), error
 
     except Exception as exc:
         error = f"Failed to run eicrecon: {exc}"
         logger.error(error, exc_info=True)
-        return False, None, error
+        return False, _failed_payload(payload, error), error
 
     finally:
         if script_path and os.path.exists(script_path):

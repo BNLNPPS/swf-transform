@@ -230,6 +230,21 @@ class ZeroMQProcessor:
     # Public API
     # ---------------------------------------------------------------------- #
 
+    @staticmethod
+    def _failed_payload(payload, error):
+        """Build a failure result with the same envelope shape as the success
+        `processed_payload` in `process()`, so callers get a consistent dict
+        regardless of status instead of `None`.
+        """
+        return {
+            "origin_message": payload.copy(),
+            "state": "failed",
+            "processed": False,
+            "payload_result": None,
+            "metrics": None,
+            "error": error,
+        }
+
     def process(self, payload):
         """
         Send *payload* to the eicrecon daemon and return ``(status, result, error)``.
@@ -243,7 +258,10 @@ class ZeroMQProcessor:
         Returns
         -------
         status : bool
-        result : dict or None
+        result : dict
+            Same envelope shape on success or failure (`origin_message`, `state`,
+            `processed`, `payload_result`, `metrics`, `error`); `payload_result`
+            and `metrics` are `None` on failure.
         error  : str or None
         """
         # ------------------------------------------------------------------ #
@@ -251,7 +269,7 @@ class ZeroMQProcessor:
         # ------------------------------------------------------------------ #
         fields, error = extract_payload_fields(payload, self._logger)
         if error:
-            return False, None, error
+            return False, self._failed_payload(payload, error), error
 
         filename = fields["filename"]
         run_id = fields["run_id"]
@@ -265,7 +283,8 @@ class ZeroMQProcessor:
         try:
             self.ensure_running()
         except RuntimeError as exc:
-            return False, None, str(exc)
+            error = str(exc)
+            return False, self._failed_payload(payload, error), error
 
         # ------------------------------------------------------------------ #
         # Send ZeroMQ request and await response
@@ -305,27 +324,27 @@ class ZeroMQProcessor:
                     f"eicrecon returned unexpected status '{response.get('status')}'",
                 )
                 self._logger.error(f"eicrecon processing error: {error}")
-                return False, None, error
+                return False, self._failed_payload(payload, error), error
 
         except zmq.Again:
             error = f"ZeroMQ request timed out after {self._request_timeout}s"
             self._logger.error(error)
-            return False, None, error
+            return False, self._failed_payload(payload, error), error
 
         except zmq.ZMQError as exc:
             error = f"ZeroMQ error: {exc}"
             self._logger.error(error)
-            return False, None, error
+            return False, self._failed_payload(payload, error), error
 
         except json.JSONDecodeError as exc:
             error = f"Failed to parse eicrecon response: {exc}"
             self._logger.error(error)
-            return False, None, error
+            return False, self._failed_payload(payload, error), error
 
         except Exception as exc:
             error = f"ZeroMQ processing failed: {exc}"
             self._logger.error(error, exc_info=True)
-            return False, None, error
+            return False, self._failed_payload(payload, error), error
 
         finally:
             try:
@@ -347,7 +366,8 @@ class ZeroMQProcessor:
                 shutil.copy2(output_file, dest_file)
                 self._logger.info(f"Copied output file to: {dest_file}")
             except OSError as exc:
-                return False, None, f"Failed to copy output file to {dest_file}: {exc}"
+                error = f"Failed to copy output file to {dest_file}: {exc}"
+                return False, self._failed_payload(payload, error), error
         else:
             self._logger.info(
                 f"No dest_path in payload; output file left at: {output_file}"
@@ -369,6 +389,7 @@ class ZeroMQProcessor:
                 "nevents_processed": response.get("events_processed"),
                 "epic_version": version,
             },
+            "error": None,
         }
 
         return True, processed_payload, None
