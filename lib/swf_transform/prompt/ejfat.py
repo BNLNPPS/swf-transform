@@ -128,7 +128,7 @@ class EJFATSubscriber:
             raise ValueError("No 'instance_uri' or 'admin_uri' found in ejfat broker configuration")
         else:
             self.logger.info(f"[ejfat] [{self.name}]: connecting to EJFAT URI: {uri_str}")
-        uri = _load_uri({"uri": uri_str})
+        uri = _load_uri({"uri": uri_str}, token_type=e2sar_py.EjfatURI.TokenType.instance)
 
         RFlags = getattr(e2sar_py.DataPlane.Reassembler, "ReassemblerFlags", None)
         rflags = RFlags() if RFlags else None
@@ -476,6 +476,15 @@ def _unwrap(val, desc: str = "operation"):
 def _load_uri(args, token_type=None):
     """Construct an EjfatURI from args using common e2sar_py entry points.
 
+    e2sar_py's EjfatURI stores whichever token (admin/instance/session) it's
+    told to parse via the `tt=` constructor argument, regardless of which
+    tokens are actually embedded in the URI string; a receiving worker only
+    ever needs the instance token (registerWorker et al. need it, not the
+    admin token used by LB reserve/free/status), so default to that here.
+    Getting this wrong doesn't fail URI construction itself -- it fails
+    later, confusingly, as e.g. "Instance token not available in the URI"
+    from registerWorker.
+
     Tries several likely factory functions and raises ImportError if
     e2sar_py is not available.
     """
@@ -486,11 +495,19 @@ def _load_uri(args, token_type=None):
     if not uri_str:
         raise ValueError("No URI provided in args (args.uri)")
 
+    if token_type is None:
+        token_type = e2sar_py.EjfatURI.TokenType.instance
+
     # Try common constructors
     try:
         if hasattr(e2sar_py, "EjfatURI"):
-            # Some bindings provide a from_string factory
             URI = e2sar_py.EjfatURI
+            try:
+                return URI(uri=uri_str, tt=token_type)
+            except TypeError:
+                # older/alternate bindings may not accept a tt= kwarg
+                pass
+            # Some bindings provide a from_string factory
             if hasattr(URI, "from_string"):
                 return URI.from_string(uri_str)
             try:
