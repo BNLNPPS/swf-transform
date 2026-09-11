@@ -21,9 +21,11 @@ import uuid
 try:
     # prefer local package layout
     from .payload_process import process_payload
+    from .utils import mask_sensitive
 except Exception:
     # fallback to installed package layout
     from swf_transform.prompt.payload_process import process_payload
+    from swf_transform.prompt.utils import mask_sensitive
 
 
 # Try to import e2sar_py (external e2sar Python bindings). The real
@@ -105,15 +107,19 @@ class EJFATSubscriber:
         self._last_log_at = time.time()
 
     def _uri_str(self):
-        # broker shape: {'<run_id>': {'instance_uri': ...}, ..., 'instance_uri': ..., 'admin_uri': ...}
+        # broker shape: {'<run_id>': {'instance_uri': ...}, ..., 'instance_uri': ...}
         # Prefer the run-specific instance_uri (from the current selector's run_id),
-        # falling back to the broker-level instance_uri, then admin_uri.
+        # falling back to the broker-level instance_uri.
+        self.logger.debug(f"[ejfat] [{self.name}]: looking up instance_uri for run_id={self.run_id} in broker={mask_sensitive(self.broker)}")
         if not isinstance(self.broker, dict):
             return None
 
         run_id = self.run_id
         if run_id is not None:
-            run_entry = self.broker.get(run_id)
+            # broker dict keys come from JSON (PanDA server config) and are
+            # always strings, but self.run_id may be an int (e.g. bin/run_prompt
+            # parses --run_id with type=int), so look up by string key.
+            run_entry = self.broker.get(str(run_id))
             if isinstance(run_entry, dict) and run_entry.get("instance_uri"):
                 return run_entry["instance_uri"]
 
@@ -125,7 +131,7 @@ class EJFATSubscriber:
 
         uri_str = self._uri_str()
         if not uri_str:
-            raise ValueError("No 'instance_uri' or 'admin_uri' found in ejfat broker configuration")
+            raise ValueError("No 'instance_uri' found in ejfat broker configuration")
         else:
             self.logger.info(f"[ejfat] [{self.name}]: connecting to EJFAT URI: {uri_str}")
         uri = _load_uri({"uri": uri_str}, token_type=e2sar_py.EjfatURI.TokenType.instance)

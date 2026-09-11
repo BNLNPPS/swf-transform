@@ -18,7 +18,7 @@ import time
 import traceback
 import uuid
 
-from .utils import setup_logging
+from .utils import setup_logging, mask_sensitive
 
 try:
     # prefer local package layout
@@ -113,16 +113,7 @@ class Transformer:
     @staticmethod
     def _mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token", "admin_uri", "instance_uri")):
         """Return a deep copy of *obj* with sensitive string values replaced by '***'."""
-        if isinstance(obj, dict):
-            return {
-                k: "***" if any(s in k.lower() for s in _sensitive)
-                else Transformer._mask_sensitive(v, _sensitive)
-                for k, v in obj.items()
-            }
-        if isinstance(obj, (list, tuple)):
-            masked = [Transformer._mask_sensitive(i, _sensitive) for i in obj]
-            return type(obj)(masked)
-        return obj
+        return mask_sensitive(obj, _sensitive)
 
     def get_broker_info_from_panda_server(self):
         """

@@ -60,6 +60,20 @@ def setup_logging(name, stream=None, log_file=None, loglevel=None):
     logging.Formatter.converter = time.gmtime
 
 
+def mask_sensitive(obj, _sensitive=("password", "pass", "passwd", "secret", "token", "admin_uri", "instance_uri")):
+    """Return a deep copy of *obj* with sensitive string values replaced by '***'."""
+    if isinstance(obj, dict):
+        return {
+            k: "***" if any(s in k.lower() for s in _sensitive)
+            else mask_sensitive(v, _sensitive)
+            for k, v in obj.items()
+        }
+    if isinstance(obj, (list, tuple)):
+        masked = [mask_sensitive(i, _sensitive) for i in obj]
+        return type(obj)(masked)
+    return obj
+
+
 def extract_version_from_filename(filename):
     """
     Extract the EPIC campaign version string from the XRootD / local path.
