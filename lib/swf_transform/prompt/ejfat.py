@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import pickle
+import random
 import re
 import socket
 import subprocess
@@ -126,17 +127,13 @@ class EJFATSubscriber:
 
         return self.broker.get("instance_uri")
 
-    def _connect(self):
-        if not _HAS_E2SAR:
-            raise ImportError("e2sar_py is required for EJFATSubscriber")
+    # Number of times to retry reassembler setup on a different local port
+    # when the configured port is already in use (see _connect).
+    _MAX_PORT_BIND_ATTEMPTS = 5
 
-        uri_str = self._uri_str()
-        if not uri_str:
-            raise ValueError("No 'instance_uri' found in ejfat broker configuration")
-        else:
-            self.logger.info(f"[ejfat] [{self.name}]: connecting to EJFAT URI: {uri_str}")
-        uri = _load_uri({"uri": uri_str}, token_type=e2sar_py.EjfatURI.TokenType.instance)
-
+    def _connect_once(self, uri, port):
+        """Build and start a Reassembler bound to `port`. Raises RuntimeError
+        (via _unwrap) on failure; caller decides whether to retry."""
         RFlags = getattr(e2sar_py.DataPlane.Reassembler, "ReassemblerFlags", None)
         rflags = RFlags() if RFlags else None
         if rflags is not None and hasattr(rflags, "useCP"):
@@ -150,18 +147,59 @@ class EJFATSubscriber:
 
         if self.data_ip:
             data_ip = e2sar_py.IPAddress.from_string(self.data_ip) if hasattr(e2sar_py, "IPAddress") else self.data_ip
-            reas = ReassemblerCls(uri, data_ip, self.port, self.threads, rflags)
+            reas = ReassemblerCls(uri, data_ip, port, self.threads, rflags)
         else:
-            reas = ReassemblerCls(uri, self.port, self.threads, rflags)
+            reas = ReassemblerCls(uri, port, self.threads, rflags)
 
-        if rflags is not None and getattr(rflags, "useCP", False):
-            # Do not swallow a failed registration: if the worker isn't registered
-            # with the control plane, the load balancer never learns its address
-            # and will silently never route any data-plane traffic to it, so let
-            # this propagate and fail _connect() like any other setup error.
-            _unwrap(getattr(reas, "registerWorker", lambda *a, **k: None)(self.node_name), "registering worker")
+        registered = False
+        try:
+            if rflags is not None and getattr(rflags, "useCP", False):
+                # Do not swallow a failed registration: if the worker isn't registered
+                # with the control plane, the load balancer never learns its address
+                # and will silently never route any data-plane traffic to it, so let
+                # this propagate and fail _connect() like any other setup error.
+                _unwrap(getattr(reas, "registerWorker", lambda *a, **k: None)(self.node_name), "registering worker")
+                registered = True
 
-        _unwrap(getattr(reas, "OpenAndStart", lambda: None)(), "starting reassembler")
+            _unwrap(getattr(reas, "OpenAndStart", lambda: None)(), "starting reassembler")
+        except Exception:
+            if registered:
+                try:
+                    reas.deregisterWorker()
+                except Exception:
+                    pass
+            raise
+
+        return reas, rflags
+
+    def _connect(self):
+        if not _HAS_E2SAR:
+            raise ImportError("e2sar_py is required for EJFATSubscriber")
+
+        uri_str = self._uri_str()
+        if not uri_str:
+            raise ValueError("No 'instance_uri' found in ejfat broker configuration")
+        else:
+            self.logger.info(f"[ejfat] [{self.name}]: connecting to EJFAT URI: {uri_str}")
+        uri = _load_uri({"uri": uri_str}, token_type=e2sar_py.EjfatURI.TokenType.instance)
+
+        port = self.port
+        for attempt in range(1, self._MAX_PORT_BIND_ATTEMPTS + 1):
+            try:
+                reas, rflags = self._connect_once(uri, port)
+                break
+            except RuntimeError as exc:
+                is_last_attempt = attempt >= self._MAX_PORT_BIND_ATTEMPTS
+                if is_last_attempt or "address already in use" not in str(exc).lower():
+                    raise
+                next_port = random.randint(port + 1, port + 1000)
+                self.logger.warning(
+                    f"[ejfat] [{self.name}]: port {port} already in use (attempt {attempt}/"
+                    f"{self._MAX_PORT_BIND_ATTEMPTS}); retrying with port {next_port}"
+                )
+                port = next_port
+
+        self.port = port
         self._rflags = rflags
         self._reas = reas
         self.has_connection_failures = False
