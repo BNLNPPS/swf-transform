@@ -12,9 +12,18 @@
 #
 set -e
 
+# Some environments this script runs in (e.g. the EJFAT container) have no
+# `singularity` binary, only Apptainer (CLI-compatible with Singularity's
+# `exec` subcommand) published on CVMFS. Prefer singularity when available.
+if command -v singularity >/dev/null 2>&1; then
+    CONTAINER_CMD="singularity"
+else
+    CONTAINER_CMD="/cvmfs/oasis.opensciencegrid.org/mis/apptainer/bin/apptainer"
+fi
+
 SINGULARITY_IMAGE="/cvmfs/singularity.opensciencegrid.org/eicweb/eic_xl:{EPIC_VERSION}-stable"
 
-singularity exec "${SINGULARITY_IMAGE}" /bin/bash -c "
+"${CONTAINER_CMD}" exec "${SINGULARITY_IMAGE}" /bin/bash -c "
 set -e
 
 # Initialise the EPIC detector geometry

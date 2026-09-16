@@ -23,11 +23,15 @@ import uuid
 try:
     # prefer local package layout
     from .payload_process import process_payload
-    from .utils import extract_version_from_filename, mask_sensitive
+    from .utils import extract_version_from_filename, mask_sensitive, resolve_container_runtime
 except Exception:
     # fallback to installed package layout
     from swf_transform.prompt.payload_process import process_payload
-    from swf_transform.prompt.utils import extract_version_from_filename, mask_sensitive
+    from swf_transform.prompt.utils import (
+        extract_version_from_filename,
+        mask_sensitive,
+        resolve_container_runtime,
+    )
 
 
 # Try to import e2sar_py (external e2sar Python bindings). The real
@@ -488,10 +492,11 @@ def _write_root_events_pyroot(payload_b64, content, logger):
     with open(writer_script, "w") as f:
         f.write(_PYROOT_WRITER_SCRIPT)
 
+    container_runtime = resolve_container_runtime()
     script = (
         "set -e\n"
         f'SINGULARITY_IMAGE="{epic_image}"\n'
-        "singularity exec \\\n"
+        f"{container_runtime} exec \\\n"
         "  -B /cvmfs:/cvmfs \\\n"
         f"  -B {workdir}:{workdir} \\\n"
         '  "${SINGULARITY_IMAGE}" \\\n'

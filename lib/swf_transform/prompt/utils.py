@@ -11,8 +11,26 @@
 import logging
 import os
 import re
+import shutil
 import sys
 import time
+
+
+# Some environments the transformer runs in (e.g. the EJFAT container) have
+# no `singularity` binary, only Apptainer (which is CLI-compatible with
+# Singularity's `exec` subcommand) published on CVMFS.
+APPTAINER_FALLBACK_BIN = "/cvmfs/oasis.opensciencegrid.org/mis/apptainer/bin/apptainer"
+
+
+def resolve_container_runtime():
+    """Return the container runtime binary to use for running Singularity images.
+
+    Prefers the local `singularity` binary; only falls back to the CVMFS
+    Apptainer binary when `singularity` cannot be found on PATH.
+    """
+    if shutil.which("singularity"):
+        return "singularity"
+    return APPTAINER_FALLBACK_BIN
 
 
 def setup_logging(name, stream=None, log_file=None, loglevel=None):

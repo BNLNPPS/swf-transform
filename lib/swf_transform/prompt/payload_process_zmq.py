@@ -17,7 +17,11 @@ import time
 
 import zmq
 
-from swf_transform.prompt.utils import extract_payload_fields, extract_version_from_filename
+from swf_transform.prompt.utils import (
+    extract_payload_fields,
+    extract_version_from_filename,
+    resolve_container_runtime,
+)
 
 
 
@@ -54,6 +58,7 @@ class ZeroMQProcessor:
         self._stdout_fh = None
         self._stderr_fh = None
         self._logger = logging.getLogger("ZeroMQProcessor")
+        self._container_runtime = resolve_container_runtime()
 
     # ---------------------------------------------------------------------- #
     # Internal helpers
@@ -64,7 +69,7 @@ class ZeroMQProcessor:
         script = (
             "set -e\n"
             f'SINGULARITY_IMAGE="{self._epic_image}"\n'
-            "singularity exec \\\n"
+            f"{self._container_runtime} exec \\\n"
             "  -B /cvmfs:/cvmfs \\\n"
             '  "${SINGULARITY_IMAGE}" \\\n'
             "  /bin/bash -c \"\n"
@@ -138,7 +143,7 @@ class ZeroMQProcessor:
         script = (
             "set -e\n"
             f'SINGULARITY_IMAGE="{self._epic_image}"\n'
-            "singularity exec \\\n"
+            f"{self._container_runtime} exec \\\n"
             "  -B /cvmfs:/cvmfs \\\n"
             '  "${SINGULARITY_IMAGE}" \\\n'
             "  /bin/bash -c \"\n"
