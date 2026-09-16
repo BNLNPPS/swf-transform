@@ -423,6 +423,7 @@ class Transformer:
                 "content": {
                     "run_id": run_id,
                     "slice_id": msg.get("content", {}).get("slice_id"),
+                    "tf_slice_id": msg.get("content", {}).get("tf_slice_id"),
                     "requested_at": msg.get("created_at"),
                     "processing_start_at": processing_start_at,
                     "processed_at": datetime.datetime.utcnow().isoformat(),

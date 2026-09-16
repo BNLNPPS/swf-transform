@@ -22,11 +22,11 @@ import uuid
 
 try:
     # prefer local package layout
-    from .payload_process import process_payload
+    from .payload_process import _failed_payload, process_payload
     from .utils import extract_version_from_filename, mask_sensitive, resolve_container_runtime
 except Exception:
     # fallback to installed package layout
-    from swf_transform.prompt.payload_process import process_payload
+    from swf_transform.prompt.payload_process import _failed_payload, process_payload
     from swf_transform.prompt.utils import (
         extract_version_from_filename,
         mask_sensitive,
@@ -606,6 +606,11 @@ def _ejfat_transformer_handler(transformer, header, msg, handler_kwargs=None):
         except Exception as ex:
             error = str(ex)
             logger.exception(f"Exception while processing payload for run_id={run_id}: {ex}")
+            # `process_payload` was never reached (e.g. `_write_root_events_pyroot`
+            # failed) or raised past its own error handling, so `result` is still
+            # `None`. Build the same `origin_message`-bearing envelope callers get
+            # on any other failure, instead of publishing `result: None`.
+            result = _failed_payload(content, error)
     else:
         logger.warning(f"Unknown msg_type received in ejfat_transformer_handler: {msg_type}")
 
@@ -616,6 +621,7 @@ def _ejfat_transformer_handler(transformer, header, msg, handler_kwargs=None):
         "content": {
             "run_id": run_id,
             "slice_id": msg.get("content", {}).get("slice_id"),
+            "tf_slice_id": msg.get("content", {}).get("tf_slice_id"),
             "requested_at": msg.get("created_at"),
             "processing_start_at": processing_start_at,
             "processed_at": datetime.datetime.utcnow().isoformat(),
