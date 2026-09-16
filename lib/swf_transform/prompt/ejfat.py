@@ -14,6 +14,7 @@ import os
 import pickle
 import re
 import socket
+import subprocess
 import threading
 import time
 import uuid
@@ -21,11 +22,11 @@ import uuid
 try:
     # prefer local package layout
     from .payload_process import process_payload
-    from .utils import mask_sensitive
+    from .utils import extract_version_from_filename, mask_sensitive
 except Exception:
     # fallback to installed package layout
     from swf_transform.prompt.payload_process import process_payload
-    from swf_transform.prompt.utils import mask_sensitive
+    from swf_transform.prompt.utils import extract_version_from_filename, mask_sensitive
 
 
 # Try to import e2sar_py (external e2sar Python bindings). The real
@@ -377,6 +378,124 @@ def _write_root_events(payload_b64, content, logger):
     return root_file
 
 
+# Runs inside the EPIC Singularity image, where PyROOT is guaranteed (that's
+# the whole reason to run there). Unpickling the payload requires `awkward`
+# (it's a pickled `ak.Array`) regardless of who does it, so that import is
+# deferred to here rather than done on the host -- if the EPIC image doesn't
+# have awkward either, this fails with a clear error instead of silently
+# leaving the host dependent on a package it doesn't need for anything else.
+_PYROOT_WRITER_SCRIPT = '''
+import pickle
+import sys
+
+pickle_file, root_file = sys.argv[1], sys.argv[2]
+
+try:
+    import awkward as ak
+except ImportError as exc:
+    raise RuntimeError(
+        "writing EJFAT events to ROOT via PyROOT requires the awkward package "
+        "(https://github.com/scikit-hep/awkward) inside the EPIC image, to "
+        "unpickle the event payload."
+    ) from exc
+
+with open(pickle_file, "rb") as fh:
+    events = pickle.load(fh)
+
+rdf = ak.to_rdataframe({"events": events})
+rdf.Snapshot("events", root_file)
+print(f"wrote {len(events)} events to {root_file} via awkward.to_rdataframe")
+'''
+
+
+def _write_root_events_pyroot(payload_b64, content, logger):
+    """Same as `_write_root_events`, but for pilot environments that have no
+    `uproot` package installed (only a bare-metal Python, no local ROOT/PyROOT
+    either). Runs the write inside the EPIC Singularity image instead -- the
+    same image `payload_process_zmq.ZeroMQProcessor` uses to run eicrecon,
+    which ships ROOT with PyROOT via `thisepic.sh` -- so PyROOT is available
+    regardless of what the host has installed.
+
+    The host only base64-decodes the payload to a raw pickle file; unpickling
+    it (which needs `awkward`, since it's a pickled `ak.Array`) and writing
+    the ROOT file both happen inside the container -- see
+    `_PYROOT_WRITER_SCRIPT`.
+
+    Returns the path to the new ROOT file.
+    """
+    workdir = os.environ.get("WORKDIR") or content.get("workdir") or os.getcwd()
+    os.makedirs(workdir, exist_ok=True)
+
+    tf_filename = content.get("tf_filename")
+    input_tf_filename = (
+        os.path.splitext(os.path.basename(tf_filename))[0] if tf_filename else "unknown"
+    )
+    run_id = content.get("run_id", "unknown")
+    slice_id = content.get("slice_id", 0)
+    root_filename = f"{input_tf_filename}_run_{run_id}_slice_{slice_id}.ejfat.root"
+    root_file = os.path.join(workdir, root_filename)
+
+    pickle_file = os.path.join(workdir, f"{root_filename}.pkl")
+    with open(pickle_file, "wb") as f:
+        f.write(base64.b64decode(payload_b64))
+
+    filename = content.get("filename", "")
+    epic_version = content.get("epic_version") or extract_version_from_filename(filename)
+    default_epic_image = (
+        f"/cvmfs/singularity.opensciencegrid.org/eicweb/eic_xl:{epic_version}-stable"
+    )
+    epic_image = content.get("epic_image") or default_epic_image
+
+    writer_script = os.path.join(workdir, f"{root_filename}.write_events.py")
+    with open(writer_script, "w") as f:
+        f.write(_PYROOT_WRITER_SCRIPT)
+
+    script = (
+        "set -e\n"
+        f'SINGULARITY_IMAGE="{epic_image}"\n'
+        "singularity exec \\\n"
+        "  -B /cvmfs:/cvmfs \\\n"
+        f"  -B {workdir}:{workdir} \\\n"
+        '  "${SINGULARITY_IMAGE}" \\\n'
+        "  /bin/bash -c \"\n"
+        "set -e\n"
+        f"source /opt/detector/epic-{epic_version}/bin/thisepic.sh\n"
+        f"python3 {writer_script} {pickle_file} {root_file}\"\n"
+    )
+    logger.info(
+        f"Writing EJFAT events to ROOT file via PyROOT (epic_image={epic_image}):\n{script}"
+    )
+
+    try:
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=int(content.get("pyroot_write_timeout", 600)),
+        )
+        logger.info(f"PyROOT write output: {proc.stdout.decode(errors='replace')}")
+    except subprocess.CalledProcessError as exc:
+        output = exc.output.decode(errors="replace") if exc.output else ""
+        raise RuntimeError(
+            f"Failed to write ROOT file via PyROOT (rc={exc.returncode}): {output}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Timed out writing ROOT file via PyROOT: {exc}") from exc
+    finally:
+        for path in (pickle_file, writer_script):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    if not os.path.exists(root_file):
+        raise RuntimeError(f"PyROOT write completed but output file not found: {root_file}")
+
+    logger.info(f"Wrote EJFAT events to ROOT file via PyROOT: {root_file}")
+    return root_file
+
+
 def _ejfat_transformer_handler(transformer, header, msg, handler_kwargs=None):
     """Process a slice message received over the EJFAT data plane.
 
@@ -428,7 +547,7 @@ def _ejfat_transformer_handler(transformer, header, msg, handler_kwargs=None):
         payload_b64 = content.pop("payload", None)
         try:
             if payload_b64 and content.get("file_type") not in ("fake", "mock"):
-                root_file = _write_root_events(payload_b64, content, logger)
+                root_file = _write_root_events_pyroot(payload_b64, content, logger)
                 content["filename"] = root_file
                 content["start"] = 0
                 content["end"] = content.get("tf_count", 1) - 1
