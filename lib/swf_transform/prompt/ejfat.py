@@ -45,6 +45,25 @@ except Exception:
     _HAS_E2SAR = False
 
 
+_DEFAULT_RECV_BUF_SIZE = 196608  # 192 KiB; e2sar reference client's (client.py) own fallback,
+# used here if the system max can't be read (e.g. non-Linux) -- fits under the commonly-seen
+# unmodified kernel default of ~208 KiB for net.core.rmem_max.
+_RECV_BUF_SIZE_MARGIN = 0.9  # stay under the Linux max: each receive thread opens its own socket,
+# so requesting the full net.core.rmem_max per-socket over-commits kernel memory with many threads
+
+
+def _max_recv_buf_size():
+    """Read a safety margin below the Linux-allowed max receive socket buffer
+    size (net.core.rmem_max); falls back to `_DEFAULT_RECV_BUF_SIZE` on
+    non-Linux or if unreadable. Mirrors `_max_socket_buf_size` in e2sar's
+    reference client (E2SAR/python/client.py)."""
+    try:
+        with open("/proc/sys/net/core/rmem_max") as f:
+            return int(int(f.read().strip()) * _RECV_BUF_SIZE_MARGIN)
+    except (OSError, ValueError):
+        return _DEFAULT_RECV_BUF_SIZE
+
+
 class EJFATSubscriber:
     """Receive slice events over the EJFAT data plane using e2sar_py.
 
@@ -70,7 +89,15 @@ class EJFATSubscriber:
         node_name=None,
         run_id=None,
         log_period_seconds=60,
-        recv_buf_size=196608,
+        recv_buf_size=None,
+        weight=1.0,
+        event_timeout_ms=3000,
+        report_worker_stats=False,
+        pid_kp=0.0,
+        pid_ki=0.0,
+        pid_kd=0.0,
+        pid_set_point=0.0,
+        send_state_period_ms=None,
         **kwargs,
     ):
         self.broker = broker or {}
@@ -98,10 +125,26 @@ class EJFATSubscriber:
         # e2sar_py's ReassemblerFlags default (3 MiB) exceeds the kernel's
         # rmem_max on nodes that haven't raised it (commonly 208 KiB), which
         # makes socket setup fail with "System socket buffer set too low for
-        # this receive socket buffer size". Default to the same value the
-        # e2sar reference client uses (192 KiB), which fits under the
-        # unmodified kernel default.
-        self.recv_buf_size = int(recv_buf_size)
+        # this receive socket buffer size". Default to 90% of the system's max
+        # (net.core.rmem_max), same as the e2sar reference client (client.py),
+        # so this fits under the node's actual configured limit instead of a
+        # hardcoded guess.
+        self.recv_buf_size = int(recv_buf_size) if recv_buf_size is not None else _max_recv_buf_size()
+        self.weight = float(weight)  # worker weight for control-plane slot assignment
+        self.event_timeout_ms = int(event_timeout_ms)  # reassembly timeout before an incomplete event is discarded
+
+        # Control-plane backpressure: the reassembler's internal sendState
+        # thread reports fill_percent (local queue occupancy, 0.0-1.0) to the
+        # LB every `period_ms` regardless of these settings, but control_signal
+        # (its PID output) is always 0.0 unless these gains/setPoint are tuned.
+        # See e2sarDPReassembler.cpp SendStateThreadState::_threadBody.
+        self.report_worker_stats = bool(report_worker_stats)
+        self.pid_kp = float(pid_kp)
+        self.pid_ki = float(pid_ki)
+        self.pid_kd = float(pid_kd)
+        self.pid_set_point = float(pid_set_point)
+        self.send_state_period_ms = int(send_state_period_ms) if send_state_period_ms is not None else None
+        self._report_stats_unsupported_warned = False
 
         self._reas = None
         self._rflags = None
@@ -111,6 +154,7 @@ class EJFATSubscriber:
         self.log_period_seconds = float(log_period_seconds)
         self._events_received = 0
         self._last_log_at = time.time()
+        self._lost_events = []
 
     def _uri_str(self):
         # broker shape: {'<run_id>': {'instance_uri': ...}, ..., 'instance_uri': ...}
@@ -144,6 +188,34 @@ class EJFATSubscriber:
             setattr(rflags, "useCP", True)
         if rflags is not None and hasattr(rflags, "rcvSocketBufSize"):
             setattr(rflags, "rcvSocketBufSize", self.recv_buf_size)
+        if rflags is not None and hasattr(rflags, "weight"):
+            setattr(rflags, "weight", self.weight)
+        if rflags is not None and hasattr(rflags, "eventTimeout_ms"):
+            setattr(rflags, "eventTimeout_ms", self.event_timeout_ms)
+        if rflags is not None:
+            for attr, value in (
+                ("Kp", self.pid_kp),
+                ("Ki", self.pid_ki),
+                ("Kd", self.pid_kd),
+                ("setPoint", self.pid_set_point),
+            ):
+                if hasattr(rflags, attr):
+                    setattr(rflags, attr, value)
+            if self.send_state_period_ms is not None and hasattr(rflags, "period_ms"):
+                setattr(rflags, "period_ms", self.send_state_period_ms)
+            if self.report_worker_stats:
+                # Not exposed by e2sar_py's pybind bindings (ReassemblerFlags.reportStats
+                # exists in the C++ struct but has no def_readwrite in py_e2sarDP.cpp), so
+                # this can only take effect once/if a future e2sar_py build adds it.
+                if hasattr(rflags, "reportStats"):
+                    setattr(rflags, "reportStats", True)
+                elif not self._report_stats_unsupported_warned:
+                    self._report_stats_unsupported_warned = True
+                    self.logger.warning(
+                        f"[ejfat] [{self.name}]: report_worker_stats=True requested but this "
+                        "e2sar_py build does not expose ReassemblerFlags.reportStats; "
+                        "WorkerStats sent to the LB will remain zeroed"
+                    )
 
         ReassemblerCls = getattr(e2sar_py.DataPlane, "Reassembler", None)
         if ReassemblerCls is None:
@@ -265,11 +337,43 @@ class EJFATSubscriber:
                     self._reas.deregisterWorker()
                 except Exception:
                     pass
+            self.logger.info(f"[ejfat] [{self.name}]: final {self._stats_summary()}")
             self._reas.stopThreads()
         except Exception:
             self.logger.exception(f"[ejfat] [{self.name}]: error during reassembler shutdown")
         finally:
             self._reas = None
+
+    def _drain_lost_events(self):
+        """Move any newly-detected lost events (incomplete reassemblies discarded
+        after `event_timeout_ms`) from the reassembler into `self._lost_events`,
+        mirroring e2sar's reference client (`_worker_stats_thread` in client.py)."""
+        get_lost = getattr(self._reas, "get_LostEvent", None)
+        if get_lost is None:
+            return
+        while True:
+            evt = get_lost()
+            if not evt:
+                break
+            self._lost_events.append(evt)
+
+    def _stats_summary(self):
+        """Build a one-line summary of reassembler stats/lost events, mirroring
+        `_print_stats_block` in e2sar's reference client (client.py), for use in
+        the periodic heartbeat log and on shutdown."""
+        self._drain_lost_events()
+        get_stats = getattr(self._reas, "getStats", None)
+        stats = get_stats() if get_stats else None
+        if stats is None:
+            return f"stats: unavailable, lost_events={len(self._lost_events)}"
+        return (
+            "stats: "
+            f"bytes={stats.totalBytes}, packets={stats.totalPackets}, "
+            f"bad_header_discards={stats.badHeaderDiscards}, events_received={stats.eventSuccess}, "
+            f"reassembly_loss={stats.reassemblyLoss}, enqueue_loss={stats.enqueueLoss}, "
+            f"data_errors={stats.dataErrCnt}, grpc_errors={stats.grpcErrCnt}, "
+            f"lost_events={len(self._lost_events)}"
+        )
 
     def _log_periodic_status(self):
         """Emit a heartbeat log every `log_period_seconds`, so it's visible in the
@@ -282,7 +386,8 @@ class EJFATSubscriber:
         self._last_log_at = now
         self.logger.info(
             f"[ejfat] [{self.name}]: heartbeat: events_received={self._events_received}, "
-            f"idle_elapsed={self.idle_elapsed():.1f}s, waiting_since={self.waiting_since()}"
+            f"idle_elapsed={self.idle_elapsed():.1f}s, waiting_since={self.waiting_since()}, "
+            f"{self._stats_summary()}"
         )
 
     def _run_loop(self):
